@@ -200,6 +200,16 @@ class Parser {
         this.peek().span,
         "cascada sin receptor (head no es envío)",
       );
+      // Recuperación: drenamos la cascada huérfana (`;` + sus mensajes) en vez de
+      // dejar el `;` sin consumir —si no, se re-rejecta a nivel statement como un
+      // E_UNEXPECTED_TOKEN redundante sobre el MISMO span (R9 define un solo error
+      // para esta malformación). Los mensajes drenados se descartan.
+      while (this.peek().type === "semicolon") {
+        this.advance(); // `;`
+        const next = this.peek().type;
+        if (next !== "keyword" && next !== "binarySelector" && next !== "identifier") break;
+        if (this.parseCascadeMsg() === null) break;
+      }
       return head;
     }
     const receiver = head.receiver;

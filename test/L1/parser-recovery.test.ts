@@ -101,3 +101,15 @@ describe("L1 · Parser · recuperación — sin doble-reporte de cierre extravia
     expect(codes(parse("1 2").errors)).toEqual(["E_UNEXPECTED_TOKEN"]);
   });
 });
+
+describe("L1 · Parser · recuperación — cascada sin receptor (R9, un solo código)", () => {
+  it("'3 ; foo' -> sólo E_CASCADE_NO_RECEIVER (drena el `;` huérfano, sin doble-reporte)", () => {
+    expect(codes(parse("3 ; foo").errors)).toEqual(["E_CASCADE_NO_RECEIVER"]);
+    expect(codes(parse("3;").errors)).toEqual(["E_CASCADE_NO_RECEIVER"]);
+    expect(codes(parse("3 ; foo ; bar").errors)).toEqual(["E_CASCADE_NO_RECEIVER"]);
+  });
+
+  it("cascada VÁLIDA sigue sin errores: 'a foo; bar'", () => {
+    expect(parse("a foo; bar").errors).toEqual([]);
+  });
+});
