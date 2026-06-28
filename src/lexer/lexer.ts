@@ -4,7 +4,7 @@
 // SLICE 2: número completo — radix/float (e/d/q)/scaledDecimal + `-` negativo por
 // posición (R2/CORR-1), backtrack de exponente y E_EXPONENT_MALFORMED (R7).
 // SLICE 3: strings `'...'` (escape `''`) y caracteres `$c` (surrogate-safe).
-// Pendiente (slices siguientes): símbolos, #( ) #[ ].
+// SLICE 4: símbolos `#sym`, `#at:put:`, `#+`, `#'...'` + `#(` arrayOpen + `#[` byteArrayOpen.
 
 import type { Position } from "../ast/nodes.js";
 import type { LexError, LexErrorCode } from "./errors.js";
@@ -215,6 +215,8 @@ class Lexer {
         return this.scanString(start);
       case CP_DOLLAR: // $ → character (R5/slice3)
         return this.scanCharacter(start);
+      case 0x23: // # → arrayOpen / byteArrayOpen / symbol (R6/R12/slice4)
+        return this.scanHash(start);
     }
 
     // `-` negativo léxico (R2/CORR-1): sólo si va pegado a dígito (o `.`dígito) Y
@@ -400,27 +402,8 @@ class Lexer {
   // value = contenido DESESCAPADO; lexeme = fuente crudo incluyendo comillas.
   private scanString(start: Position): void {
     this.advance(); // comilla de apertura
-    let value = "";
-    for (;;) {
-      if (this.atEnd) {
-        this.error("E_UNTERMINATED_STRING", start, "string sin cerrar");
-        return;
-      }
-      const c = this.peek();
-      if (c === CP_APOSTROPHE) {
-        this.advance(); // comilla
-        if (this.peek() === CP_APOSTROPHE) {
-          // '' → comilla literal
-          this.advance();
-          value += "'";
-          continue;
-        }
-        // comilla de cierre
-        break;
-      }
-      value += String.fromCodePoint(c);
-      this.advance();
-    }
+    const value = this.scanStringContent(start);
+    if (value === null) return; // E_UNTERMINATED_STRING ya emitido
     const end = this.pos();
     this.tokens.push({
       type: "string",
@@ -447,6 +430,132 @@ class Lexer {
       value: String.fromCodePoint(cp),
       span: { start, end },
     });
+  }
+
+  // #-dispatch (R6/R12/slice4): #( arrayOpen | #[ byteArrayOpen | #'...' quoted symbol
+  // | #letter... unary/keyword symbol | #binchar+ binary selector symbol | E_EMPTY_SYMBOL.
+  private scanHash(start: Position): void {
+    this.advance(); // '#'
+    const next = this.peek();
+
+    // #( — arrayOpen (ANSI core, sin origin, R12)
+    if (next === 0x28) {
+      this.advance(); // '('
+      const end = this.pos();
+      this.tokens.push({ type: "arrayOpen", lexeme: "#(", span: { start, end } });
+      return;
+    }
+
+    // #[ — byteArrayOpen (ext:pharo-squeak, R12)
+    if (next === 0x5b) {
+      this.advance(); // '['
+      const end = this.pos();
+      this.tokens.push({
+        type: "byteArrayOpen",
+        lexeme: "#[",
+        origin: "ext:pharo-squeak",
+        span: { start, end },
+      });
+      return;
+    }
+
+    // #'...' — quoted symbol (mismo escape '' que string; value desescapado, R6)
+    if (next === CP_APOSTROPHE) {
+      this.advance(); // "'"
+      const value = this.scanStringContent(start);
+      if (value === null) return; // E_UNTERMINATED_STRING ya emitido
+      const end = this.pos();
+      this.tokens.push({
+        type: "symbol",
+        lexeme: this.src.slice(start.offset, end.offset),
+        value,
+        span: { start, end },
+      });
+      return;
+    }
+
+    // #letter → unary o keyword symbol maximal (R6): (identifier ':')+ o sólo identifier.
+    // Un par `identifier ':'` se incluye en el run SÓLO si el identifier está
+    // inmediatamente seguido de ':' (no ':='). Se escanea mirando hacia adelante
+    // con `peekKeywordPartEnd` para decidir si consumir antes de avanzar.
+    if (isLetter(next)) {
+      // ¿El input en `j` empieza con un `identifier ':'` (keyword part)?
+      // Devuelve el offset tras el ':' o -1 si no.
+      const peekKeywordPartEnd = (j: number): number => {
+        if (!isLetter(this.cpAt(j))) return -1;
+        while (isLetter(this.cpAt(j)) || isDigit(this.cpAt(j))) j++;
+        if (this.cpAt(j) !== CP_COLON) return -1;
+        if (this.cpAt(j + 1) === CP_EQUALS) return -1; // ':='
+        return j + 1;
+      };
+
+      // Si el primer identifier es una keyword part, consume el run; si no, sólo identifier.
+      if (peekKeywordPartEnd(this.i) !== -1) {
+        // keyword symbol: consume pares (identifier ':')+ maximal
+        for (;;) {
+          while (isLetter(this.peek()) || isDigit(this.peek())) this.advance();
+          this.advance(); // ':'
+          // continúa sólo si hay otra keyword part inmediatamente
+          if (peekKeywordPartEnd(this.i) !== -1) continue;
+          break;
+        }
+      } else {
+        // unary symbol: sólo identifier (sin ':')
+        while (isLetter(this.peek()) || isDigit(this.peek())) this.advance();
+      }
+      const end = this.pos();
+      const value = this.src.slice(start.offset + 1, end.offset); // sin '#'
+      this.tokens.push({
+        type: "symbol",
+        lexeme: this.src.slice(start.offset, end.offset),
+        value,
+        span: { start, end },
+      });
+      return;
+    }
+
+    // #binchar+ — binary selector symbol (maximal munch de BINARY_CHARS, R6)
+    if (BINARY_CHARS.has(next)) {
+      while (BINARY_CHARS.has(this.peek())) this.advance();
+      const end = this.pos();
+      const value = this.src.slice(start.offset + 1, end.offset); // sin '#'
+      this.tokens.push({
+        type: "symbol",
+        lexeme: this.src.slice(start.offset, end.offset),
+        value,
+        span: { start, end },
+      });
+      return;
+    }
+
+    // ningún caso válido → E_EMPTY_SYMBOL (R10)
+    this.error("E_EMPTY_SYMBOL", start, "símbolo vacío o carácter no válido tras #");
+  }
+
+  // Escanea el contenido de una string hasta la comilla de cierre (escape '').
+  // `errStart` = posición del delimitador de apertura (para el span del error).
+  // Retorna el valor desescapado, o null si el string no cierra (error ya emitido).
+  private scanStringContent(errStart: Position = this.pos()): string | null {
+    let value = "";
+    for (;;) {
+      if (this.atEnd) {
+        this.error("E_UNTERMINATED_STRING", errStart, "string/símbolo sin cerrar");
+        return null;
+      }
+      const c = this.peek();
+      if (c === CP_APOSTROPHE) {
+        this.advance();
+        if (this.peek() === CP_APOSTROPHE) {
+          this.advance();
+          value += "'";
+          continue;
+        }
+        break; // comilla de cierre
+      }
+      value += String.fromCodePoint(c);
+      this.advance();
+    }
+    return value;
   }
 
   // scaledDecimal (R4/DEV-011): value = mantissa string (exacta), scale = dígitos
