@@ -6,6 +6,8 @@
 
 import type {
   AssignmentNode,
+  BlockNode,
+  CascadeMsg,
   Expression,
   LiteralKind,
   LiteralNode,
@@ -129,13 +131,68 @@ class Parser {
     return this.parseExpression();
   }
 
-  // expression ::= assignment | keyword-message. Assignment SÓLO cuando hay un
-  // identifier seguido de `:=` (right-assoc). Cascade llega en otra slice.
+  // expression ::= assignment | cascade. Assignment SÓLO cuando hay un identifier
+  // seguido de `:=` (right-assoc). En otro caso, cascade (que envuelve al mensaje).
   private parseExpression(): Expression {
     if (this.peek().type === "identifier" && this.peek(1).type === "assignmentOperator") {
       return this.parseAssignment();
     }
-    return this.parseKeywordMessage();
+    return this.parseCascade();
+  }
+
+  // cascade ::= keyword-message (`;` message)*. R9: si hay `;`, el head debe ser un
+  // MessageSend; su receptor pasa a ser CascadeNode.receiver y el propio head se
+  // descompone en el primer CascadeMsg (kind/selector/args, SIN receptor). Cada `;`
+  // siguiente parsea un mensaje más (unary|binary|keyword) sobre ese mismo receptor.
+  private parseCascade(): Expression {
+    const head = this.parseKeywordMessage();
+    if (this.peek().type !== "semicolon") return head;
+    // El head debe ser un MessageSend para poder descomponerlo (R9).
+    if (head.type !== "MessageSend") {
+      this.error(
+        "E_CASCADE_NO_RECEIVER",
+        this.peek().span,
+        "cascada sin receptor (head no es envío)",
+      );
+      return head;
+    }
+    const receiver = head.receiver;
+    const messages: CascadeMsg[] = [msgToCascade(head)];
+    while (this.peek().type === "semicolon") {
+      this.advance(); // `;`
+      messages.push(this.parseCascadeMsg());
+    }
+    const end = messages[messages.length - 1]?.span.end ?? head.span.end;
+    return { type: "Cascade", receiver, messages, span: mkSpan(receiver.span.start, end) };
+  }
+
+  // Un mensaje de cascada (sobre el receptor común ya conocido): unary | binary |
+  // keyword. No lleva receptor propio (CascadeMsg). El span cubre selector+args.
+  private parseCascadeMsg(): CascadeMsg {
+    const start = this.peek().span.start;
+    if (this.peek().type === "keyword") {
+      let selector = "";
+      const args: Expression[] = [];
+      while (this.peek().type === "keyword") {
+        selector += this.advance().lexeme; // el lexema ya incluye el `:`.
+        args.push(this.parseBinaryMessage());
+      }
+      const end = args[args.length - 1]?.span.end ?? start;
+      return { kind: "keyword", selector, args, span: mkSpan(start, end) };
+    }
+    if (this.peek().type === "binarySelector") {
+      const op = this.advance();
+      const arg = this.parseUnaryMessage();
+      return {
+        kind: "binary",
+        selector: op.lexeme,
+        args: [arg],
+        span: mkSpan(start, arg.span.end),
+      };
+    }
+    // unary: un único identifier-selector.
+    const sel = this.advance();
+    return { kind: "unary", selector: sel.lexeme, args: [], span: mkSpan(start, sel.span.end) };
   }
 
   // assignment ::= variable `:=` expression (right-assoc => `a := b := c` anida).
@@ -153,6 +210,7 @@ class Parser {
   private parseKeywordMessage(): Expression {
     const receiver = this.parseBinaryMessage();
     if (this.peek().type !== "keyword") return receiver;
+    const msgStart = this.peek().span.start; // inicio del primer keyword (R9 cascade).
     let selector = "";
     const args: Expression[] = [];
     while (this.peek().type === "keyword") {
@@ -160,8 +218,10 @@ class Parser {
       selector += kw.lexeme;
       args.push(this.parseBinaryMessage());
     }
-    const span = mkSpan(receiver.span.start, args[args.length - 1]?.span.end ?? receiver.span.end);
-    return msg("keyword", receiver, selector, args, span);
+    const end = args[args.length - 1]?.span.end ?? receiver.span.end;
+    const node = msg("keyword", receiver, selector, args, mkSpan(receiver.span.start, end));
+    msgSpans.set(node, mkSpan(msgStart, end)); // span sólo-mensaje (para cascada R9).
+    return node;
   }
 
   // binary-message ::= unary-message (binarySelector unary-message)*  — left-assoc,
@@ -171,8 +231,15 @@ class Parser {
     while (this.peek().type === "binarySelector") {
       const op = this.advance();
       const arg = this.parseUnaryMessage();
-      const span = mkSpan(receiver.span.start, arg.span.end);
-      receiver = msg("binary", receiver, op.lexeme, [arg], span);
+      const node = msg(
+        "binary",
+        receiver,
+        op.lexeme,
+        [arg],
+        mkSpan(receiver.span.start, arg.span.end),
+      );
+      msgSpans.set(node, mkSpan(op.span.start, arg.span.end)); // span sólo-mensaje.
+      receiver = node;
     }
     return receiver;
   }
@@ -182,8 +249,15 @@ class Parser {
     let receiver = this.parsePrimary();
     while (this.peek().type === "identifier") {
       const sel = this.advance();
-      const span = mkSpan(receiver.span.start, sel.span.end);
-      receiver = msg("unary", receiver, sel.lexeme, [], span);
+      const node = msg(
+        "unary",
+        receiver,
+        sel.lexeme,
+        [],
+        mkSpan(receiver.span.start, sel.span.end),
+      );
+      msgSpans.set(node, sel.span); // span sólo-mensaje = el selector.
+      receiver = node;
     }
     return receiver;
   }
@@ -205,6 +279,8 @@ class Parser {
         return this.variable(this.advance());
       case "lparen":
         return this.parseParenExpr();
+      case "lbracket":
+        return this.parseBlock();
       default:
         // Token inesperado donde se esperaba un primary: rechazo determinista.
         this.error("E_UNEXPECTED_TOKEN", t.span, `token inesperado: ${t.type}`);
@@ -226,6 +302,32 @@ class Parser {
       "paréntesis sin cerrar",
     );
     return inner;
+  }
+
+  // block ::= `[` (`:`identifier)* (`|` si hubo params)? sequence `]`.
+  // Params via colon+identifier (DEV-015/R3); si hay alguno, los cierra un `|`.
+  // El cuerpo es una Sequence (que puede abrir con su propio `| temps |`, R13).
+  // E_UNCLOSED_BLOCK si falta `]`.
+  private parseBlock(): BlockNode {
+    const open = this.advance(); // `[`
+    const params: VariableNode[] = [];
+    while (this.peek().type === "colon") {
+      this.advance(); // `:`
+      if (this.peek().type === "identifier") params.push(this.variable(this.advance()));
+    }
+    // El `|` terminador de params sólo aparece si hubo params (DEV-015).
+    if (params.length > 0 && this.peek().type === "verticalBar") this.advance();
+    const body = this.parseSequence("rbracket");
+    if (this.peek().type === "rbracket") {
+      const close = this.advance();
+      return { type: "Block", params, body, span: mkSpan(open.span.start, close.span.end) };
+    }
+    this.error(
+      "E_UNCLOSED_BLOCK",
+      mkSpan(open.span.start, this.peek().span.end),
+      "bloque sin cerrar",
+    );
+    return { type: "Block", params, body, span: mkSpan(open.span.start, this.peek().span.end) };
   }
 
   private numberLiteral(t: Token): LiteralNode {
@@ -251,6 +353,22 @@ class Parser {
 
 function mkSpan(start: Position, end: Position): SourceSpan {
   return { start, end };
+}
+
+// Span "sólo-mensaje" (selector + args, SIN receptor) de cada MessageSend, registrado
+// al construirlo. Lo usa la descomposición de cascada (R9) para el span del primer
+// CascadeMsg sin reconstruir posiciones del lexer.
+const msgSpans = new WeakMap<MessageSendNode, SourceSpan>();
+
+// Descompone el head de una cascada en su primer CascadeMsg (R9): conserva
+// kind/selector/args y descarta el receptor; el span es el del mensaje sólo.
+function msgToCascade(node: MessageSendNode): CascadeMsg {
+  return {
+    kind: node.kind,
+    selector: node.selector,
+    args: node.args,
+    span: msgSpans.get(node) ?? node.span,
+  };
 }
 
 function msg(
