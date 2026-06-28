@@ -37,7 +37,12 @@ describe("L1 · lexer slice 2 — negativo por posición (R2 / CORR-1)", () => {
   it("`-` en posición de operando inicia literal negativo", () => {
     expect(types("x := -5")).toEqual(["identifier", "assignmentOperator", "number", "eof"]);
     expect(tokenize("x := -5").tokens[2]?.value).toBe(-5);
-    expect(tokenize("(-4)").tokens.map((t) => t.type)).toEqual(["lparen", "number", "rparen", "eof"]);
+    expect(tokenize("(-4)").tokens.map((t) => t.type)).toEqual([
+      "lparen",
+      "number",
+      "rparen",
+      "eof",
+    ]);
     expect(tokenize("(-4)").tokens[1]?.value).toBe(-4);
   });
 
@@ -108,6 +113,15 @@ describe("L1 · lexer slice 2 — radix (R4)", () => {
     // `16rG`: `G`(=16) ≥ 16 SIN dígito previo => sigue siendo error (count===0).
     expect(codes("16rG")).toEqual(["E_RADIX_DIGIT"]);
   });
+
+  it("radix-float fuera de alcance L1: `16r1.8` se parte (DEV-018)", () => {
+    // R4 sólo define radix ENTEROS; `.` no es dígito radix ⇒ cierra `16r1` (=1),
+    // luego `.` (period) y `8` (number) por separado. ANSI permite radix floats; diferido.
+    expect(types("16r1.8")).toEqual(["number", "period", "number", "eof"]);
+    expect(lexemes("16r1.8")).toEqual(["16r1", ".", "8", ""]);
+    expect(first("16r1.8").value).toBe(1);
+    expect(codes("16r1.8")).toEqual([]);
+  });
 });
 
 describe("L1 · lexer slice 2 — float (R4/R7)", () => {
@@ -143,6 +157,14 @@ describe("L1 · lexer slice 2 — float (R4/R7)", () => {
   it("exponente malformado (R7): `1.5e+` y `1e-`", () => {
     expect(codes("1.5e+")).toEqual(["E_EXPONENT_MALFORMED"]);
     expect(codes("1e-")).toEqual(["E_EXPONENT_MALFORMED"]);
+  });
+
+  it("float overflow IEEE-754: `1e400` conserva value=Infinity (DEV-017)", () => {
+    // El lexer no rechaza el overflow (R4: value=parseFloat); la serialización
+    // canónica lo envuelve como {$float:'Infinity'} (ver ast-to-json.test.ts).
+    expect(first("1e400").numKind).toBe("float");
+    expect(first("1e400").value).toBe(Number.POSITIVE_INFINITY);
+    expect(Number.isFinite(first("1e400").value as number)).toBe(false);
   });
 });
 

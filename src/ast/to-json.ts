@@ -3,13 +3,7 @@
 // bigint -> {"$bigint":"<decimal>"}, `origin` solo si "ext:pharo-squeak".
 // La igualdad estructural de los tests compara `astToJSON(ast)` con deepEqual.
 
-import type {
-  CascadeMsg,
-  LiteralNode,
-  Node,
-  Position,
-  SourceSpan,
-} from "./nodes.js";
+import type { CascadeMsg, LiteralNode, Node, Position, SourceSpan } from "./nodes.js";
 
 function posJSON(p: Position): unknown {
   return { offset: p.offset, line: p.line, column: p.column };
@@ -20,7 +14,21 @@ function spanJSON(s: SourceSpan): unknown {
 }
 
 function valueJSON(v: number | bigint | string | boolean | null): unknown {
-  return typeof v === "bigint" ? { $bigint: v.toString() } : v;
+  if (typeof v === "bigint") return { $bigint: v.toString() };
+  // Float no finito (overflow IEEE-754, p.ej. `1e400` ⇒ Infinity): JSON.stringify
+  // lo volvería "null" y corrompería los golden — envoltura $float explícita,
+  // espejo de $bigint (R12 / DEV-017).
+  if (typeof v === "number" && !Number.isFinite(v)) {
+    return {
+      $float:
+        v === Number.POSITIVE_INFINITY
+          ? "Infinity"
+          : v === Number.NEGATIVE_INFINITY
+            ? "-Infinity"
+            : "NaN",
+    };
+  }
+  return v;
 }
 
 /** Serializa cualquier nodo AST a su forma JSON canónica (orden de claves estable). */

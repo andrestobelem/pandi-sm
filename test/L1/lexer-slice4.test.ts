@@ -55,13 +55,7 @@ describe("L1 · lexer slice 4 — símbolos y arrays literales", () => {
     });
 
     it("#[1 2] → [byteArrayOpen, number, number, rbracket, eof]", () => {
-      expect(types("#[1 2]")).toEqual([
-        "byteArrayOpen",
-        "number",
-        "number",
-        "rbracket",
-        "eof",
-      ]);
+      expect(types("#[1 2]")).toEqual(["byteArrayOpen", "number", "number", "rbracket", "eof"]);
     });
 
     it("el ] después de #[ es rbracket ordinario", () => {
@@ -203,13 +197,23 @@ describe("L1 · lexer slice 4 — símbolos y arrays literales", () => {
   describe("arrayOpen y posición de operando para primer elemento", () => {
     it("#(-4) → [arrayOpen, number -4, rparen, eof] (primer elem en posición operando)", () => {
       const { tokens } = tokenize("#(-4)");
+      expect(tokens.map((t) => t.type)).toEqual(["arrayOpen", "number", "rparen", "eof"]);
+      expect(tokens[1]?.value).toBe(-4);
+    });
+
+    it("#[-4] → [byteArrayOpen, binarySelector, number, rbracket, eof] (DEV-016)", () => {
+      // Asimetría deliberada con #(: byteArrayOpen NO abre posición de operando
+      // (bytes sin signo [0,255]); el `-` tras #[ es binario, no signo de literal.
+      const { tokens } = tokenize("#[-4]");
       expect(tokens.map((t) => t.type)).toEqual([
-        "arrayOpen",
+        "byteArrayOpen",
+        "binarySelector",
         "number",
-        "rparen",
+        "rbracket",
         "eof",
       ]);
-      expect(tokens[1]?.value).toBe(-4);
+      expect(tokens[1]?.lexeme).toBe("-");
+      expect(tokens[2]?.value).toBe(4);
     });
   });
 });

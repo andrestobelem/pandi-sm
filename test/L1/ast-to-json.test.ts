@@ -114,4 +114,20 @@ describe("L1 · astToJSON", () => {
       "span",
     ]);
   });
+
+  it("serializa un float no finito (overflow) como {$float} (DEV-017)", () => {
+    const floatLit = (raw: string, value: number): LiteralNode => ({
+      type: "Literal",
+      lit: "float",
+      raw,
+      value,
+      span: SP,
+    });
+    const litValue = (n: LiteralNode): unknown => (astToJSON(n) as Record<string, unknown>).value;
+    expect(litValue(floatLit("1e400", Number.POSITIVE_INFINITY))).toEqual({ $float: "Infinity" });
+    expect(litValue(floatLit("-1e400", Number.NEGATIVE_INFINITY))).toEqual({ $float: "-Infinity" });
+    expect(litValue(floatLit("nan", Number.NaN))).toEqual({ $float: "NaN" });
+    // un float finito normal pasa tal cual (no se envuelve).
+    expect(litValue(floatLit("1.5", 1.5))).toBe(1.5);
+  });
 });
