@@ -26,28 +26,34 @@ delimitado por líneas `---`:
 
 ```smalltalk
 "---
-section: A.2          ANSI / Anexo A — producción o protocolo cubierto
-kind: positive        positive | negative
-phase: parse          lex | parse | eval
-layer: L1             L0..L6
-oracle: spec          spec | dialecto:gst | dialecto:pharo   (sólo casos diferenciales golden-master, §7)
-expect: 14            printString esperado (positivos eval) | code+span (negativos)
+section: message.keyword   etiqueta de categoría (dotted; ancla a producción del Anexo A donde aplica)
+kind: positive             positive | negative
+codes: E_UNCLOSED_BLOCK    (sólo negativos) lista EXACTA de error.code que produce parse(), en orden, separada por espacios
+note: ...                  (opcional) qué fenómeno cubre el caso
 ---"
-3 + 4 * 2
+2 max: 3 + 4
 ```
 
-Lo parsea `parseFrontmatter` en `test/harness/st-runner.ts`.
+Lo parsea `parseFrontmatter` en `test/harness/st-runner.ts`; el harness de corpus
+es `test/L1/corpus.test.ts`.
 
-### Reglas
+### Reglas (corpus L1 — fase `parse`, implementado)
 
-- **`oracle:` no se omite en casos diferenciales.** `spec` = conformidad ANSI;
-  `dialecto:gst`/`dialecto:pharo` = paridad con un Smalltalk vivo. NO conflar
-  ambos (lección JSCert): una extensión no-ANSI de Pharo no es estándar.
-- **Positivos** comparan estructura/resultado contra un fixture
-  (`.ast.json` en L1, `printString` en eval). **Negativos** asertan `code`+`span`
-  del error, deterministas.
-- **Sin caso sin sección.** Un script de cobertura cuenta casos por producción
-  del Anexo A y falla si una producción del gate queda sin caso.
+- **Positivos**: `parse(body).errors` vacío, `ast` no nulo y `astToJSON(ast)`
+  **determinista** (parsear dos veces ⇒ igual). La estructura AST exacta de cada
+  construcción ya está fijada por los tests unitarios de `test/L1/*.test.ts`; el
+  corpus es la capa de **amplitud/conformidad** (programas representativos), no
+  duplica los golden por-nodo.
+- **Negativos**: `codes` lista los `error.code` exactos que emite `parse(body)`
+  (rechazo determinista, R10). El `span` de cada error lo fijan los tests
+  unitarios; el corpus fija los **códigos**. Catálogo de códigos: ver R10 +
+  `errors.ts` de lexer/parser.
+- **Trazabilidad**: `section` agrupa por categoría. (El gate de cobertura por
+  producción del Anexo A y los `.ast.json` golden quedan como trabajo futuro.)
 
-> En L0 el corpus `.st` aún no se ejecuta (adapter = stub); sólo se prueban el
-> descubrimiento y el parseo de frontmatter. El corpus se activa al verde de L1.
+> **Campos de eval (`phase: eval`, `expect: <printString>`, `oracle:` para
+> diferenciales golden-master) llegan en L3**, cuando el `RuntimeAdapter` real
+> ejecute el corpus. En L1 el corpus se evalúa sólo hasta `parse`.
+
+> En L0 el corpus `.st` aún no se ejecutaba (adapter = stub); sólo se probaban el
+> descubrimiento y el parseo de frontmatter. El corpus se activó al verde de L1.
