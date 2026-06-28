@@ -60,13 +60,18 @@ previo es un **valor** (number, identifier, `)`, `]`, `}`, string, char, symbol)
 el `-` es `binarySelector` (maximal-munch ⇒ `--`, `-=`, …). Casos: `3 --4` ⇒
 `3` `--` `4` (válido); `3 - -4` ⇒ `3` `-` `-4`; `3-4` ⇒ `3 - 4`; `x := -5` ⇒
 `-5`; `#(1 -4)` ⇒ `1`, `-4` (el escáner de arrays trata cada elemento en posición
-de operando). Origin: spec-ANSI (A.1/A.4) + ingeniería (la regla de posición).
+de operando). `#[` (byteArrayOpen) **no** abre posición de operando —sus elementos
+son bytes sin signo `[0,255]`, un negativo no tiene sentido (DEV-016)—: `#[-4]` ⇒
+`#[` `-` `4`, mientras `#(-4)` ⇒ `#(` `-4`. Origin: spec-ANSI (A.1/A.4) + ingeniería
+(la regla de posición).
 
 ### R3 — `:=` vs keyword (sin `E_ASSIGN_VS_KEYWORD`, ver CORR-2)
 Al escanear `:`: si va inmediatamente seguido de `=` ⇒ token `assignmentOperator`
 (`:=`), cerrando el identifier anterior si lo hubiera. Si va seguido de otra cosa
 y está pegado a un identifier previo ⇒ `keyword` (`foo:`). Un `:` aislado no
-seguido de `=` ⇒ `E_UNEXPECTED_CHAR`. `a:=b`, `a := b`, `foo: 1` todos positivos.
+seguido de `=` ⇒ token `colon` (marcador de block-arg `:x`, R13/DEV-015), **no**
+`E_UNEXPECTED_CHAR`; un `:` fuera de contexto lo rechaza el PARSER, no el lexer.
+`a:=b`, `a := b`, `foo: 1` todos positivos.
 
 ### R4 — `value` numérico del Token/LiteralNode
 - integer (decimal y radix): `value` = `number`, o `bigint` si `|n| > 2^53-1`.
@@ -74,7 +79,10 @@ seguido de `=` ⇒ `E_UNEXPECTED_CHAR`. `a:=b`, `a := b`, `foo: 1` todos positiv
   `number` si cabe — corrige el bug de "radix grande corrompe value".
 - float (E/D/Q): `value` = `number` vía `parseFloat(raw.replace(/[dq]/i,'e'))`
   (normalizar `d`/`q`→`e`, que `parseFloat` no entiende) — corrige FloatD/FloatQ.
-  `lit:'float'` + campo `floatKind: 'e'|'d'|'q'`.
+  `lit:'float'` + campo `floatKind: 'e'|'d'|'q'`. **radix-float** (`16r1.8`) fuera
+  de alcance L1 (R4 sólo radix enteros): `16r1.8` ⇒ `16r1` `.` `8` (DEV-018). Un
+  float no finito por overflow (`1e400` ⇒ `Infinity`) conserva `value=Infinity`;
+  su serialización canónica es `{"$float":…}` (R12/DEV-017).
 - scaledDecimal: `value` = **string** de la mantissa (exacto, sin pérdida) +
   campo `scale: number` (= dígitos fraccionales declarados, o los de la mantissa
   si se omite). La semántica ScaledDecimal completa (unscaled+renormalización) es
@@ -123,7 +131,8 @@ el head no es `MessageSend` ⇒ `E_CASCADE_NO_RECEIVER`.
 `E_UNTERMINATED_CHAR` (`$`+EOF), `E_EMPTY_SYMBOL` (`#` sin símbolo válido),
 `E_RADIX_BASE` (base∉[2,36]), `E_RADIX_DIGIT` (dígito≥base), `E_RADIX_NO_DIGITS`
 (`r` sin dígitos), `E_EXPONENT_MALFORMED` (`1.5e+`), `E_UNEXPECTED_CHAR` (code
-point que no inicia token; incl. `:` suelto). **ParseError:** `E_UNEXPECTED_TOKEN`,
+point que no inicia token; el `:` suelto **no** es error —lexea como `colon`,
+DEV-015). **ParseError:** `E_UNEXPECTED_TOKEN`,
 `E_UNCLOSED_PAREN`, `E_UNCLOSED_BLOCK`, `E_UNCLOSED_ARRAY`, `E_UNCLOSED_BYTEARRAY`,
 `E_UNCLOSED_DYNARRAY`, `E_KEYWORD_NO_ARG`, `E_CASCADE_NO_RECEIVER`, `E_BYTE_RANGE`
 (byte∉[0,255] en `#[ ]`, origin:ingeniería). **Eliminados:** `E_NEG_NO_SPACE`
@@ -147,7 +156,9 @@ args,span)`; `Cascade(type,receiver,messages,span)` con `CascadeMsg(kind,selecto
 args,span)`; `Block(type,params,body,span)`; `Variable(type,name,span)`;
 `Literal(type,lit,raw,value?,floatKind?,scale?,origin?,elements?,span)`;
 `DynamicArray(type,elements,origin,span)`. `span` = `{start:{offset,line,column},
-end:{...}}` en ese orden. **bigint** ⇒ `{"$bigint":"<decimal>"}`. **origin** se
+end:{...}}` en ese orden. **bigint** ⇒ `{"$bigint":"<decimal>"}`; **float no
+finito** ⇒ `{"$float":"Infinity"|"-Infinity"|"NaN"}` (DEV-017, evita que
+`JSON.stringify(Infinity)==="null"` corrompa los golden). **origin** se
 emite SÓLO si `'ext:pharo-squeak'` (los nodos ANSI no llevan flag — gate "0 nodos
 ANSI con flag"). Igualdad estructural en tests vía `deepEqual` sobre `astToJSON`.
 
