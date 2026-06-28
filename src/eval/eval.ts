@@ -1,21 +1,103 @@
-// L3 · eval — evaluador tree-walking MÍNIMO (plan §4/§5.3). Consume el AST de L1.
-// Subconjunto: LiteralNode (integer/string) y MessageSendNode (binary/keyword).
-// La aritmética binaria es left-to-right SIN precedencia (Anexo A.2): la
-// estructura del árbol del parser ya codifica el orden, evalNode sólo lo recorre.
-// Bloques, super, dNU y non-local-return son L3-proper (diferidos).
+// L3 · eval — evaluador tree-walking (plan §4/§5.3). Sobre el subconjunto del
+// skeleton (Literal + MessageSend) S1 añade: entornos léxicos reales (Scope con
+// vars/parent/self/home), AssignmentNode (mutación en el scope más cercano que
+// declara la variable), SequenceNode (temporaries inicializadas a nil) y
+// BlockNode -> BlockClosure (captura scope + home). La invocación del bloque
+// (value/value:/...) vive en primitives.ts y reentra por evalBlock.
+// La aritmética binaria es left-to-right SIN precedencia (Anexo A.2): el árbol
+// del parser ya codifica el orden. super, dNU, condicionales y non-local-return
+// son S2/S3 (diferidos en este slice).
 
-import type { Expression, MessageSendNode } from "../ast/nodes.js";
+import type {
+  BlockNode,
+  Expression,
+  MessageSendNode,
+  SequenceNode,
+  Statement,
+} from "../ast/nodes.js";
 import { parse } from "../parser/index.js";
-import { bootstrapKernel, type STValue, type Universe } from "../runtime/index.js";
+import {
+  bootstrapKernel,
+  type HomeMarker,
+  type Scope,
+  type STClosure,
+  type STValue,
+  type Universe,
+} from "../runtime/index.js";
+import { ObjectFormat } from "../runtime/index.js";
 import { installPrimitives } from "./primitives.js";
 import { send } from "./send.js";
 
-/** evalNode — evalúa una expresión del subconjunto del skeleton. */
-export function evalNode(node: Expression, u: Universe): STValue {
+/** Contexto de evaluación: el scope léxico actual + el Universe (para send/globals). */
+export interface EvalCtx {
+  scope: Scope;
+  u: Universe;
+}
+
+let nextClosureHash = 1;
+
+/** Resuelve un global por nombre desde el Universe (clases + pseudo-vars). */
+function lookupGlobal(name: string, u: Universe): STValue | undefined {
+  switch (name) {
+    case "nil":
+      return u.nil;
+    case "true":
+      return true;
+    case "false":
+      return false;
+    case "Transcript":
+      return u.Transcript;
+    case "Object":
+      return u.Object;
+    case "Behavior":
+      return u.Behavior;
+    case "ClassDescription":
+      return u.ClassDescription;
+    case "Class":
+      return u.Class;
+    case "Metaclass":
+      return u.Metaclass;
+    case "UndefinedObject":
+      return u.UndefinedObject;
+    case "SmallInteger":
+      return u.SmallInteger;
+    case "String":
+      return u.String;
+    case "BlockClosure":
+      return u.BlockClosure;
+    default:
+      return undefined;
+  }
+}
+
+/** Busca el scope MÁS CERCANO (incl. el actual) cuyo `vars` declara `name`. */
+function declaringScope(scope: Scope, name: string): Scope | null {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    if (current.vars.has(name)) return current;
+    current = current.parent;
+  }
+  return null;
+}
+
+/** Resuelve una variable: self -> scope.self; vars (cadena); luego globals. */
+function resolveVariable(name: string, ctx: EvalCtx): STValue {
+  if (name === "self") return ctx.scope.self;
+  const owner = declaringScope(ctx.scope, name);
+  if (owner !== null) {
+    // `has` garantizó la presencia; Map.get devuelve el valor (nil si sin asignar).
+    return owner.vars.get(name) as STValue;
+  }
+  const global = lookupGlobal(name, ctx.u);
+  if (global !== undefined) return global;
+  throw new Error(`variable no resoluble: ${name}`);
+}
+
+/** evalNode — evalúa una expresión en el contexto léxico `ctx`. */
+export function evalNode(node: Expression, ctx: EvalCtx): STValue {
   switch (node.type) {
     case "Literal": {
-      // El lexer ya promovió el entero (number|bigint) y des-escapó el string;
-      // leemos node.value directamente (ver log-de-desviaciones / l1-decisiones).
+      // El lexer ya promovió el entero (number|bigint) y des-escapó el string.
       if (node.lit === "integer") {
         const v = node.value;
         if (typeof v === "number" || typeof v === "bigint") return v;
@@ -28,27 +110,98 @@ export function evalNode(node: Expression, u: Universe): STValue {
       throw new Error(`literal no soportado en el skeleton: ${node.lit}`);
     }
     case "MessageSend":
-      return evalMessageSend(node, u);
-    case "Variable": {
-      // El skeleton sólo resuelve el global `Transcript`; el binding completo
-      // de variables (temporaries/instancias/globals) es L3-proper (diferido).
-      if (node.name === "Transcript") return u.Transcript;
-      if (node.name === "nil") return u.nil;
-      throw new Error(`variable no resoluble en el skeleton: ${node.name}`);
+      return evalMessageSend(node, ctx);
+    case "Variable":
+      return resolveVariable(node.name, ctx);
+    case "Assignment": {
+      const value = evalNode(node.value, ctx);
+      const owner = declaringScope(ctx.scope, node.target.name);
+      if (owner === null) {
+        // Asignar a una variable no declarada es un error (asignación a
+        // clase/global es diferida). Error de host determinista (no Smalltalk: L5).
+        throw new Error(`variable no declarada: ${node.target.name}`);
+      }
+      owner.vars.set(node.target.name, value);
+      return value;
     }
+    case "Block":
+      return makeClosure(node, ctx);
     default:
       throw new Error(`nodo no soportado en el skeleton: ${node.type}`);
   }
 }
 
-/** Evalúa receptor y argumentos, luego despacha por send(). Binary/keyword sólo. */
-function evalMessageSend(node: MessageSendNode, u: Universe): STValue {
-  if (node.kind === "unary") {
-    throw new Error("mensajes unarios no soportados en el skeleton");
+/** evalNode(BlockNode) -> BlockClosure: captura el scope y el home actuales. */
+function makeClosure(node: BlockNode, ctx: EvalCtx): STClosure {
+  return {
+    class: ctx.u.BlockClosure,
+    hash: nextClosureHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    node,
+    scope: ctx.scope,
+    home: ctx.scope.home,
+  };
+}
+
+/**
+ * evalBlock — invoca un BlockClosure con `args` (value/value:/...). Abre un scope
+ * hijo del scope capturado, liga los params (chequea aridad), evalúa el cuerpo y
+ * devuelve el valor del último statement (nil si vacío). El home es el capturado
+ * en la creación, de modo que `^` (S3) desenrolla al método/programa de origen.
+ */
+export function evalBlock(closure: STClosure, args: STValue[], u: Universe): STValue {
+  const params = closure.node.params;
+  if (params.length !== args.length) {
+    throw new Error(
+      `aridad incorrecta: el bloque espera ${params.length} argumento(s), recibió ${args.length}`,
+    );
   }
-  const receiver = evalNode(node.receiver, u);
-  const args = node.args.map((arg) => evalNode(arg, u));
-  return send(receiver, node.selector, args, u);
+  const scope: Scope = {
+    vars: new Map(),
+    parent: closure.scope,
+    self: closure.scope.self,
+    home: closure.home,
+  };
+  // Aridad ya verificada arriba; recorremos params y tomamos el arg paralelo.
+  params.forEach((param, i) => {
+    scope.vars.set(param.name, args[i] as STValue);
+  });
+  return evalSequence(closure.node.body, { scope, u });
+}
+
+/** Evalúa receptor y argumentos, luego despacha por send(). */
+function evalMessageSend(node: MessageSendNode, ctx: EvalCtx): STValue {
+  const receiver = evalNode(node.receiver, ctx);
+  const args = node.args.map((arg) => evalNode(arg, ctx));
+  return send(receiver, node.selector, args, ctx.u);
+}
+
+/**
+ * evalSequence — declara las temporaries de la secuencia (inicializadas a nil en
+ * el scope dado) y evalúa los statements en orden. Devuelve el valor del último
+ * (nil si vacía). Un ReturnNode terminal se evalúa como el valor de la secuencia
+ * (el unwind por NonLocalReturn es S3; aquí `^` sólo aparece a tope de programa).
+ */
+function evalSequence(seq: SequenceNode, ctx: EvalCtx): STValue {
+  for (const temp of seq.temporaries) {
+    ctx.scope.vars.set(temp.name, ctx.u.nil);
+  }
+  let value: STValue = ctx.u.nil;
+  for (const stmt of seq.statements) {
+    value = evalStatement(stmt, ctx);
+  }
+  return value;
+}
+
+/** Evalúa un statement (expresión o `^expr`). */
+function evalStatement(stmt: Statement, ctx: EvalCtx): STValue {
+  if (stmt.type === "Return") {
+    // `^` a nivel de programa equivale al valor de la expresión (terminal).
+    // El desenrollado real (NonLocalReturn) llega en S3.
+    return evalNode(stmt.value, ctx);
+  }
+  return evalNode(stmt, ctx);
 }
 
 /** Resultado enriquecido: el último valor + el Universe (para leer el buffer). */
@@ -65,14 +218,11 @@ export function evalWith(source: string): EvalResult {
   }
   const universe = bootstrapKernel();
   installPrimitives(universe);
-  let value: STValue = universe.nil;
-  for (const stmt of ast.body.statements) {
-    if (stmt.type === "Return") {
-      value = evalNode(stmt.value, universe);
-      break; // ^ termina la secuencia (terminal)
-    }
-    value = evalNode(stmt, universe);
-  }
+  // Scope de programa: self = nil (no hay receptor de método a tope de programa;
+  // nil es el receptor convencional del doIt). home = un marcador fresco.
+  const home: HomeMarker = {};
+  const scope: Scope = { vars: new Map(), parent: null, self: universe.nil, home };
+  const value = evalSequence(ast.body, { scope, u: universe });
   return { value, universe };
 }
 

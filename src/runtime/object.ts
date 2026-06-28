@@ -27,6 +27,39 @@ export interface STObject {
   pointers: STValue[];
 }
 
+/**
+ * Marcador de "home context" (plan §5.3): identidad por referencia (`===`). Un
+ * `^` dentro de un bloque desenrolla hasta el home capturado en su creación. En
+ * S1 el cierre sólo lo guarda; el unwind por NonLocalReturn llega en S3.
+ */
+export type HomeMarker = object;
+
+/**
+ * Scope léxico (plan §5.3): cadena de entornos. `vars` son las temporaries/params
+ * (mutación compartida por referencia — un temp mutado en un bloque es visible al
+ * home). `self` se resuelve aquí (NO vía vars). `home` identifica el método/programa
+ * para el desenrollado de `^`.
+ */
+export interface Scope {
+  vars: Map<string, STValue>;
+  parent: Scope | null;
+  self: STValue;
+  home: HomeMarker;
+}
+
+/**
+ * BlockClosure: un STObject (class = u.BlockClosure) con campos extra. Reusa la
+ * forma de STObject para que classOf lo despache por `.class` sin ramas nuevas;
+ * `node`/`scope`/`home` son el cuerpo, el entorno capturado y el home de `^`.
+ */
+export interface STClosure extends STObject {
+  // El AST del bloque vive en src/ast; lo tipamos laxo aquí para no acoplar
+  // runtime->ast (la primitiva value/value: lo interpreta).
+  node: import("../ast/nodes.js").BlockNode;
+  scope: Scope;
+  home: HomeMarker;
+}
+
 /** Una clase es un STObject extendido con estado de Behavior (method dict + cadena de superclases). */
 export interface STClass extends STObject {
   name: string;
@@ -50,6 +83,7 @@ export interface Universe {
   UndefinedObject: STClass;
   SmallInteger: STClass;
   String: STClass;
+  BlockClosure: STClass;
   Transcript_class: STClass;
   nil: STObject; // instancia única de UndefinedObject
   Transcript: STObject; // instancia única; su 'show:' (L3) acumula en un buffer

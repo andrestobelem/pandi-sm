@@ -40,7 +40,9 @@ describe("L3 · envío no soportado falla limpio (dNU diferido)", () => {
     expect(() => evalSt("3 - 4")).toThrow(/entiende|doesNotUnderstand/i);
   });
 
-  it("mensaje unario => throw (fuera del alcance del skeleton)", () => {
-    expect(() => evalSt("3 factorial")).toThrow(/unari/i);
+  it("mensaje unario sin primitiva => throw observable (S1: los unarios ya despachan)", () => {
+    // S1 habilitó el despacho de unarios (lo necesita `[block] value`); un selector
+    // unario sin primitiva ahora es un miss observable, no un rechazo del skeleton.
+    expect(() => evalSt("3 factorial")).toThrow(/entiende|doesNotUnderstand/i);
   });
 });

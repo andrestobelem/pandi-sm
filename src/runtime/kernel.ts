@@ -47,6 +47,7 @@ export function bootstrapKernel(): Universe {
   const UndefinedObject = makeClass("UndefinedObject", Object_, 0);
   const SmallInteger = makeClass("SmallInteger", Object_, 0);
   const String_ = makeClass("String", Object_, 0);
+  const BlockClosure = makeClass("BlockClosure", Object_, 0);
   const Transcript_class = makeClass("Transcript class", Object_, 0);
 
   // ── nil: instancia única de UndefinedObject; termina las cadenas ─────────
@@ -72,6 +73,7 @@ export function bootstrapKernel(): Universe {
     UndefinedObject,
     SmallInteger,
     String_,
+    BlockClosure,
     Transcript_class,
   ]) {
     c.class = Metaclass;
@@ -94,6 +96,7 @@ export function bootstrapKernel(): Universe {
     UndefinedObject,
     SmallInteger,
     String: String_,
+    BlockClosure,
     Transcript_class,
     nil,
     Transcript,

@@ -4,9 +4,12 @@
 
 export {
   classOf,
+  type HomeMarker,
   ObjectFormat,
   type Primitive,
+  type Scope,
   type STClass,
+  type STClosure,
   type STObject,
   type STValue,
   type Universe,
