@@ -1,10 +1,13 @@
 // L3 · send — dispatch MÍNIMO por la superclass chain (plan §5.3). Internamos el
 // selector (identidad ==), luego subimos desde classOf(receiver) buscando una
-// primitiva en methodDict. El miss NO tiene éxito silencioso: lanzamos un Error
-// de host (doesNotUnderstand de Smalltalk es L3-proper, diferido).
+// primitiva en methodDict. El miss NO tiene éxito silencioso: enrutamos por
+// Object>>doesNotUnderstand: con un Message reificado (selector + args), de modo
+// que el fallo es observable y determinista (S3). El MessageNotUnderstood como
+// Exception navegable es L5 (diferido); aquí el default lanza un Error de host.
 
 import {
   classOf,
+  type Message,
   type Primitive,
   type STClass,
   type STValue,
@@ -31,7 +34,16 @@ export function send(receiver: STValue, selector: string, args: STValue[], u: Un
   const cls = classOf(receiver, u);
   const prim = lookup(cls, sym);
   if (prim === undefined) {
-    throw new Error(`doesNotUnderstand: ${cls.name} no entiende #${selector}`);
+    // Miss: reificamos el envío y lo enrutamos por doesNotUnderstand: (siempre
+    // presente en Object, raíz de la cadena). El argumento del dNU es el Message.
+    const dnuSym = u.symbols.intern("doesNotUnderstand:");
+    const dnu = lookup(cls, dnuSym);
+    if (dnu === undefined) {
+      // Object>>doesNotUnderstand: no instalado: error de host (no debería ocurrir).
+      throw new Error(`doesNotUnderstand: ${cls.name} no entiende #${selector}`);
+    }
+    const message: Message = { selector, args };
+    return dnu(receiver, [message as unknown as STValue], u);
   }
   return prim(receiver, args, u);
 }

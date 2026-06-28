@@ -3,7 +3,7 @@
 // JS con HOOK de auto-promoción a BigInt en overflow) y Transcript>>show: (acumula
 // en un buffer en memoria). El protocolo numérico/colecciones completo es diferido.
 
-import type { Primitive, STClosure, STValue, Universe } from "../runtime/index.js";
+import type { Message, Primitive, STClosure, STValue, Universe } from "../runtime/index.js";
 import { evalBlock } from "./eval.js";
 
 /** Suma SmallInteger. HOOK: si el resultado nativo no es seguro, promueve a BigInt. */
@@ -13,6 +13,16 @@ function smallIntegerPlus(receiver: STValue, args: STValue[]): STValue {
   if (typeof a === "bigint" || typeof b === "bigint") return BigInt(a) + BigInt(b);
   const r = a + b;
   if (!Number.isSafeInteger(r)) return BigInt(a) + BigInt(b);
+  return r;
+}
+
+/** Resta SmallInteger. Mismo HOOK de promoción a BigInt en overflow que la suma. */
+function smallIntegerMinus(receiver: STValue, args: STValue[]): STValue {
+  const a = receiver as number | bigint;
+  const b = args[0] as number | bigint;
+  if (typeof a === "bigint" || typeof b === "bigint") return BigInt(a) - BigInt(b);
+  const r = a - b;
+  if (!Number.isSafeInteger(r)) return BigInt(a) - BigInt(b);
   return r;
 }
 
@@ -44,6 +54,42 @@ function transcriptShow(receiver: STValue, args: STValue[], u: Universe): STValu
  */
 function blockValue(receiver: STValue, args: STValue[], u: Universe): STValue {
   return evalBlock(receiver as STClosure, args, u);
+}
+
+/**
+ * Integer>>timesRepeat: (DEV-004) — repite el bloque `n` veces ITERATIVAMENTE
+ * (un bucle JS, sin recursión por iteración, equivalente a `1 to: self do:`). No
+ * es special-form: Squeak NO inlinea timesRepeat:; aquí es un envío ordinario que
+ * itera. Un `^` dentro del bloque atraviesa el bucle por throw (NonLocalReturn).
+ * Devuelve el receptor (convención del bucle). El bloque debe ser de aridad 0.
+ */
+function timesRepeat(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const n = Number(receiver as number | bigint);
+  const block = args[0] as STClosure;
+  for (let i = 0; i < n; i++) {
+    evalBlock(block, [], u);
+  }
+  return receiver;
+}
+
+/**
+ * Object>>doesNotUnderstand: — acción por defecto de un envío no entendido (S3).
+ * send() llega aquí con un Message reificado (selector + args). Lanzamos un Error
+ * de host OBSERVABLE y DETERMINISTA que nombra la clase del receptor y el selector;
+ * el MessageNotUnderstood como Exception navegable (capturable con on:do:) es L5.
+ */
+function doesNotUnderstand(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const message = args[0] as unknown as Message;
+  const recvClass = receiver === u.nil ? "UndefinedObject" : describeReceiver(receiver, u);
+  throw new Error(`doesNotUnderstand: ${recvClass} no entiende #${message.selector}`);
+}
+
+/** Nombre de la clase del receptor para el mensaje de error de dNU. */
+function describeReceiver(receiver: STValue, u: Universe): string {
+  if (typeof receiver === "number" || typeof receiver === "bigint") return u.SmallInteger.name;
+  if (typeof receiver === "string") return u.String.name;
+  if (typeof receiver === "boolean") return receiver ? u.True.name : u.False.name;
+  return receiver.class.name;
 }
 
 /**
@@ -93,7 +139,10 @@ const falseOr: Primitive = (_r, args, u) => evalBranch(args[0], u);
 /** installPrimitives — cablea las primitivas del skeleton en los methodDict. */
 export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(u.symbols.intern("+"), smallIntegerPlus);
+  u.SmallInteger.methodDict.set(u.symbols.intern("-"), smallIntegerMinus);
   u.SmallInteger.methodDict.set(u.symbols.intern("*"), smallIntegerTimes);
+  // timesRepeat: itera (DEV-004); el bucle vive en la primitiva, no en la AST.
+  u.SmallInteger.methodDict.set(u.symbols.intern("timesRepeat:"), timesRepeat);
   // Comparaciones: devuelven booleanos nativos (true/false -> True/False).
   u.SmallInteger.methodDict.set(
     u.symbols.intern("<"),
@@ -141,4 +190,6 @@ export function installPrimitives(u: Universe): void {
   u.BlockClosure.methodDict.set(u.symbols.intern("value:"), blockValue);
   u.BlockClosure.methodDict.set(u.symbols.intern("value:value:"), blockValue);
   u.BlockClosure.methodDict.set(u.symbols.intern("value:value:value:"), blockValue);
+  // Object>>doesNotUnderstand: — raíz de la cadena; send() la invoca en todo miss.
+  u.Object.methodDict.set(u.symbols.intern("doesNotUnderstand:"), doesNotUnderstand);
 }

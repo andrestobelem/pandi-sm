@@ -35,6 +35,32 @@ export interface STObject {
 export type HomeMarker = object;
 
 /**
+ * NonLocalReturn — objeto de control-flow del `^` (plan §2/§5.3, V8-2): una clase
+ * JS PLANA (NO extends Error) para evitar la captura de stack de V8 en el hot path.
+ * evalNode(ReturnNode) lanza este objeto; la frontera de programa/método cuyo
+ * `home === e.home` lo captura y lo convierte en su valor de retorno; un home
+ * ajeno se relanza (BlockCannotReturn para un home muerto es L5, diferido). La
+ * misma maquinaria la reutiliza L5 para el unwind de excepciones.
+ */
+export class NonLocalReturn {
+  constructor(
+    readonly home: HomeMarker,
+    readonly value: STValue,
+  ) {}
+}
+
+/**
+ * Message — reificación MÍNIMA de un envío no entendido (plan §5.3 / L5 dNU): el
+ * selector ausente y los argumentos, que Object>>doesNotUnderstand: recibe. El
+ * MessageNotUnderstood completo (Exception navegable) es L5; aquí basta lo
+ * observable para un error determinista.
+ */
+export interface Message {
+  selector: string;
+  args: STValue[];
+}
+
+/**
  * Scope léxico (plan §5.3): cadena de entornos. `vars` son las temporaries/params
  * (mutación compartida por referencia — un temp mutado en un bloque es visible al
  * home). `self` se resuelve aquí (NO vía vars). `home` identifica el método/programa

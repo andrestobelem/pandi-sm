@@ -5,6 +5,8 @@
 export {
   classOf,
   type HomeMarker,
+  type Message,
+  NonLocalReturn,
   ObjectFormat,
   type Primitive,
   type Scope,

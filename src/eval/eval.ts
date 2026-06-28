@@ -5,8 +5,10 @@
 // BlockNode -> BlockClosure (captura scope + home). La invocación del bloque
 // (value/value:/...) vive en primitives.ts y reentra por evalBlock.
 // La aritmética binaria es left-to-right SIN precedencia (Anexo A.2): el árbol
-// del parser ya codifica el orden. super, dNU, condicionales y non-local-return
-// son S2/S3 (diferidos en este slice).
+// del parser ya codifica el orden. S3 añade: bucles como special-forms iterativas
+// (whileTrue:/whileFalse:/to:do:/to:by:do:, gating-por-bloque-literal, §5.3.1) y
+// non-local return (^ -> NonLocalReturn plano, capturado en la frontera de programa).
+// super queda diferido (no hay métodos de usuario contra los que super-despachar).
 
 import type {
   BlockNode,
@@ -19,6 +21,7 @@ import { parse } from "../parser/index.js";
 import {
   bootstrapKernel,
   type HomeMarker,
+  NonLocalReturn,
   type Scope,
   type STClosure,
   type STValue,
@@ -178,9 +181,94 @@ export function evalBlock(closure: STClosure, args: STValue[], u: Universe): STV
 
 /** Evalúa receptor y argumentos, luego despacha por send(). */
 function evalMessageSend(node: MessageSendNode, ctx: EvalCtx): STValue {
+  // Bucles = special-forms iterativas (plan §5.3.1): reconocidas ANTES del envío
+  // dinámico SÓLO cuando los operandos exigidos son BlockNode literales (mismo
+  // gating-por-bloque-literal que Squeak). Reúsan el frame JS (sin recursión por
+  // iteración) y NO interceptan el NonLocalReturn: un `^` los atraviesa por throw.
+  const loop = tryLoopSpecialForm(node, ctx);
+  if (loop !== NO_LOOP) return loop;
   const receiver = evalNode(node.receiver, ctx);
   const args = node.args.map((arg) => evalNode(arg, ctx));
   return send(receiver, node.selector, args, ctx.u);
+}
+
+/** Centinela: distingue "no es un bucle" de un bucle que devolvió nil. */
+const NO_LOOP = Symbol("no-loop");
+
+/** ¿`node` es un BlockNode literal en el AST? (gating-por-bloque-literal). */
+function isLiteralBlock(node: Expression): node is BlockNode {
+  return node.type === "Block";
+}
+
+/**
+ * truthy(v) SEÑALA, no asume falsy (plan §5.3.1): compara contra los singletons
+ * nativos true/false. Si no es ninguno, NO trata cualquier no-false como true ni
+ * cae en bucle infinito: envía `mustBeBoolean` a un no-Boolean, que cae a Object
+ * y enruta por doesNotUnderstand: — el MISMO miss determinista que daría un ifTrue:
+ * real sobre ese receptor (preserva la frontera de Booleanidad de la condición).
+ */
+function truthy(v: STValue, u: Universe): boolean {
+  if (v === true) return true;
+  if (v === false) return false;
+  // No es Boolean: provoca el dNU determinista (el no-Boolean no entiende los
+  // selectores condicionales) en vez de asumir Booleanidad o entrar en bucle.
+  return send(v, "mustBeBoolean", [], u) as boolean;
+}
+
+/**
+ * tryLoopSpecialForm — si `node` es un selector de bucle con bloques literales,
+ * ejecuta el bucle iterativo y devuelve su valor (el receptor, convención de los
+ * bucles en Smalltalk); en otro caso devuelve NO_LOOP para caer al envío normal.
+ * timesRepeat: NO está aquí: se implementa como primitiva delegando en to:do: (DEV-004).
+ */
+function tryLoopSpecialForm(node: MessageSendNode, ctx: EvalCtx): STValue | typeof NO_LOOP {
+  const { u } = ctx;
+  switch (node.selector) {
+    case "whileTrue:":
+    case "whileFalse:": {
+      const recv = node.receiver;
+      const body = node.args[0];
+      if (!isLiteralBlock(recv) || body === undefined || !isLiteralBlock(body)) return NO_LOOP;
+      const cond = makeClosure(recv, ctx);
+      const bodyClosure = makeClosure(body, ctx);
+      const want = node.selector === "whileTrue:";
+      while (truthy(evalBlock(cond, [], u), u) === want) {
+        evalBlock(bodyClosure, [], u);
+      }
+      return u.nil;
+    }
+    case "to:do:": {
+      const body = node.args[1];
+      if (body === undefined || !isLiteralBlock(body)) return NO_LOOP;
+      // Receptor/cota se evalúan UNA vez (un side-effect en ellos ocurre una sola vez).
+      const receiver = evalNode(node.receiver, ctx);
+      const stop = Number(evalNode(node.args[0] as Expression, ctx) as number | bigint);
+      const bodyClosure = makeClosure(body, ctx);
+      for (let i = Number(receiver as number | bigint); i <= stop; i++) {
+        evalBlock(bodyClosure, [i], u);
+      }
+      return receiver; // to:do: devuelve el receptor.
+    }
+    case "to:by:do:": {
+      const body = node.args[2];
+      if (body === undefined || !isLiteralBlock(body)) return NO_LOOP;
+      const receiver = evalNode(node.receiver, ctx);
+      const start = Number(receiver as number | bigint);
+      const stop = Number(evalNode(node.args[0] as Expression, ctx) as number | bigint);
+      const step = Number(evalNode(node.args[1] as Expression, ctx) as number | bigint);
+      const bodyClosure = makeClosure(body, ctx);
+      if (step > 0) {
+        for (let i = start; i <= stop; i += step) evalBlock(bodyClosure, [i], u);
+      } else if (step < 0) {
+        for (let i = start; i >= stop; i += step) evalBlock(bodyClosure, [i], u);
+      }
+      // step === 0 no itera (evita bucle infinito); SmallInteger>>to:by:do: con
+      // paso 0 es erróneo en Smalltalk, lo dejamos como no-op determinista.
+      return receiver; // to:by:do: devuelve el receptor.
+    }
+    default:
+      return NO_LOOP;
+  }
 }
 
 /**
@@ -203,9 +291,12 @@ function evalSequence(seq: SequenceNode, ctx: EvalCtx): STValue {
 /** Evalúa un statement (expresión o `^expr`). */
 function evalStatement(stmt: Statement, ctx: EvalCtx): STValue {
   if (stmt.type === "Return") {
-    // `^` a nivel de programa equivale al valor de la expresión (terminal).
-    // El desenrollado real (NonLocalReturn) llega en S3.
-    return evalNode(stmt.value, ctx);
+    // `^expr` desenrolla al home del scope actual lanzando un NonLocalReturn PLANO
+    // (no extends Error, plan §2/V8-2). La frontera de programa (evalWith) cuyo
+    // home === ctx.scope.home lo captura; desde un bloque el home es el capturado
+    // en su creación, así que el `^` atraviesa los frames JS de value/bucles hasta
+    // su origen. (Un home muerto -> BlockCannotReturn es L5, diferido.)
+    throw new NonLocalReturn(ctx.scope.home, evalNode(stmt.value, ctx));
   }
   return evalNode(stmt, ctx);
 }
@@ -228,8 +319,17 @@ export function evalWith(source: string): EvalResult {
   // nil es el receptor convencional del doIt). home = un marcador fresco.
   const home: HomeMarker = {};
   const scope: Scope = { vars: new Map(), parent: null, self: universe.nil, home };
-  const value = evalSequence(ast.body, { scope, u: universe });
-  return { value, universe };
+  try {
+    const value = evalSequence(ast.body, { scope, u: universe });
+    return { value, universe };
+  } catch (e) {
+    // `^` que desenrolla al home del programa: su valor ES el valor del programa.
+    // Un home ajeno (no debería ocurrir a este nivel) se relanza.
+    if (e instanceof NonLocalReturn && e.home === home) {
+      return { value: e.value, universe };
+    }
+    throw e;
+  }
 }
 
 /**

@@ -35,9 +35,10 @@ describe("L3 · printString (skeleton)", () => {
   });
 });
 
-describe("L3 · envío no soportado falla limpio (dNU diferido)", () => {
+describe("L3 · envío no soportado falla limpio (doesNotUnderstand:)", () => {
   it("binario sin primitiva => throw observable (no corrupción silenciosa)", () => {
-    expect(() => evalSt("3 - 4")).toThrow(/entiende|doesNotUnderstand/i);
+    // `//` (división entera) es L4, aún sin primitiva: el miss enruta por dNU.
+    expect(() => evalSt("3 // 4")).toThrow(/entiende|doesNotUnderstand/i);
   });
 
   it("mensaje unario sin primitiva => throw observable (S1: los unarios ya despachan)", () => {
