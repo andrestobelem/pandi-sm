@@ -11,6 +11,7 @@ export type LexErrorCode =
   | "E_RADIX_BASE"
   | "E_RADIX_DIGIT"
   | "E_RADIX_NO_DIGITS"
+  | "E_EXPONENT_MALFORMED"
   | "E_UNEXPECTED_CHAR";
 
 export interface LexError {

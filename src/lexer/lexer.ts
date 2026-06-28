@@ -1,8 +1,9 @@
 // L1 · Lexer — escáner a mano, iteración por code point (R1).
 // SLICE 1: trivia (whitespace + comentarios), puntuación/operadores,
 // identifier/keyword/`:=`/`:`, decimalInteger (+ promoción BigInt), binarySelector/`|`.
-// Pendiente (slices siguientes): radix/float/scaled, strings, `$c`, símbolos, #( ) #[ ],
-// y la regla del `-` negativo por posición (R2).
+// SLICE 2: número completo — radix/float (e/d/q)/scaledDecimal + `-` negativo por
+// posición (R2/CORR-1), backtrack de exponente y E_EXPONENT_MALFORMED (R7).
+// Pendiente (slices siguientes): strings, `$c`, símbolos, #( ) #[ ].
 
 import type { Position } from "../ast/nodes.js";
 import type { LexError, LexErrorCode } from "./errors.js";
@@ -13,6 +14,11 @@ const CP_CR = 0x0d;
 const CP_COLON = 0x3a;
 const CP_EQUALS = 0x3d;
 const CP_QUOTE = 0x22; // "
+const CP_MINUS = 0x2d; // -
+const CP_PERIOD = 0x2e; // .
+const CP_R = 0x72; // r (radix)
+const CP_S = 0x73; // s (scaledDecimal)
+const CP_PLUS = 0x2b; // +
 const ZERO = 0x30;
 const NINE = 0x39;
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -33,6 +39,25 @@ function isLetter(cp: number): boolean {
 
 function isWhitespace(cp: number): boolean {
   return cp === 0x20 || cp === 0x09 || cp === CP_LF || cp === CP_CR || cp === 0x0c;
+}
+
+// Letra de exponente float (R7): `e`/`d`/`q`, mayúsc/minúsc.
+function isExponentMarker(cp: number): boolean {
+  return cp === 0x65 || cp === 0x45 || cp === 0x64 || cp === 0x44 || cp === 0x71 || cp === 0x51;
+}
+
+// Valor de un dígito radix (R4): 0-9 A-Z (case-insensitive) ⇒ 0..35, o -1 si no aplica.
+function radixDigitValue(cp: number): number {
+  if (cp >= ZERO && cp <= NINE) return cp - ZERO;
+  if (cp >= 0x41 && cp <= 0x5a) return cp - 0x41 + 10; // A-Z
+  if (cp >= 0x61 && cp <= 0x7a) return cp - 0x61 + 10; // a-z
+  return -1;
+}
+
+// Promoción por magnitud (R4): number nativo si |n| ≤ 2^53-1, si no bigint.
+function promoteInteger(mag: bigint, negative: boolean): number | bigint {
+  const signed = negative ? -mag : mag;
+  return mag <= MAX_SAFE ? Number(signed) : signed;
 }
 
 class Lexer {
@@ -138,7 +163,7 @@ class Lexer {
     const start = this.pos();
     const c = this.peek();
 
-    if (isDigit(c)) return this.scanDecimalInteger(start);
+    if (isDigit(c)) return this.scanNumber(start, false);
     if (isLetter(c)) return this.scanIdentifierOrKeyword(start);
 
     switch (c) {
@@ -185,6 +210,14 @@ class Lexer {
         return this.simple("semicolon", start);
     }
 
+    // `-` negativo léxico (R2/CORR-1): sólo si va pegado a dígito (o `.`dígito) Y
+    // estamos en posición de operando. Si no, cae a binarySelector (maximal-munch
+    // ⇒ `--`, `-=`). DEBE ir ANTES del fallthrough de BINARY_CHARS.
+    if (c === CP_MINUS && this.operandPosition() && this.startsNumberAfterSign()) {
+      this.advance(); // '-'
+      return this.scanNumber(start, true);
+    }
+
     if (BINARY_CHARS.has(c)) return this.scanBinarySelector(start);
 
     this.advance();
@@ -217,19 +250,170 @@ class Lexer {
     return this.simple(lexeme === "|" ? "verticalBar" : "binarySelector", start);
   }
 
-  private scanDecimalInteger(start: Position): void {
+  // Posición de operando (R2): el `-` inicia literal negativo sólo si el token
+  // previo deja al lexer esperando un operando. Sin trivia en `tokens`, el último
+  // token empujado ES el último significativo. Tokens de VALOR ⇒ `-` binario.
+  private operandPosition(): boolean {
+    const prev = this.tokens[this.tokens.length - 1];
+    if (prev === undefined) return true; // inicio de input
+    switch (prev.type) {
+      case "lparen":
+      case "lbracket":
+      case "dynArrayOpen":
+      case "arrayOpen":
+      case "binarySelector":
+      case "keyword":
+      case "assignmentOperator":
+      case "returnOperator":
+      case "period":
+      case "semicolon":
+      case "verticalBar":
+        return true;
+      default:
+        return false; // number/identifier/`)`/`]`/`}`/string/char/symbol/colon…
+    }
+  }
+
+  // El `-` (this.i) va pegado a un dígito, o a `.`dígito ⇒ es un literal numérico.
+  private startsNumberAfterSign(): boolean {
+    const next = this.cpAt(this.i + 1);
+    if (isDigit(next)) return true;
+    return next === CP_PERIOD && isDigit(this.cpAt(this.i + 2));
+  }
+
+  // Autómata numérico (R4/R7): decimalInteger | radix | float (e/d/q) | scaledDecimal.
+  // `start` apunta al inicio del lexema (incl. `-` si negative). `this.i` ya pasó el `-`.
+  private scanNumber(start: Position, negative: boolean): void {
     let acc = 0n;
     while (isDigit(this.peek())) {
       acc = acc * 10n + BigInt(this.peek() - ZERO);
       this.advance();
     }
-    const value = acc <= MAX_SAFE ? Number(acc) : acc; // promoción BigInt (R4)
+
+    // radix (R4): `<base>r<digits>` — acumula en BigInt, degrada por magnitud.
+    if (this.peek() === CP_R) {
+      return this.scanRadix(start, negative, acc);
+    }
+
+    // fracción (R7): `.` se consume sólo si va seguido de dígito (puede ser de un
+    // float o de la mantissa de un scaledDecimal — `1.5s2` es válido).
+    let isFloat = false;
+    if (this.peek() === CP_PERIOD && isDigit(this.cpAt(this.i + 1))) {
+      isFloat = true;
+      this.advance(); // '.'
+      while (isDigit(this.peek())) this.advance();
+    }
+
+    // scaledDecimal (R4/DEV-011): sufijo `s` cierra la mantissa con scale opcional.
+    // Tiene prioridad sobre el exponente (un scaledDecimal no lleva e/d/q).
+    if (this.peek() === CP_S) return this.scanScaled(start, negative);
+
+    // exponente (R7): `e`/`d`/`q` consumido sólo si va seguido de `[+-]?digit`.
+    if (isExponentMarker(this.peek())) {
+      const after = this.cpAt(this.i + 1);
+      const hasSign = after === CP_PLUS || after === CP_MINUS;
+      const digitAt = hasSign ? this.cpAt(this.i + 2) : after;
+      if (isDigit(digitAt)) {
+        isFloat = true;
+        this.advance(); // letra
+        if (hasSign) this.advance(); // signo
+        while (isDigit(this.peek())) this.advance();
+      } else if (hasSign) {
+        // `1.5e+` / `1e-`: letra+signo SIN dígito ⇒ negativo real (R7/R10).
+        this.advance(); // letra
+        this.advance(); // signo
+        return this.error("E_EXPONENT_MALFORMED", start, "exponente sin dígitos");
+      }
+      // si no hay dígito y no hay signo: backtrack — la letra queda como identifier.
+    }
+
+    if (isFloat) return this.emitFloat(start);
+
+    // entero decimal (R4).
     const end = this.pos();
     this.tokens.push({
       type: "number",
       lexeme: this.src.slice(start.offset, end.offset),
-      value,
+      value: promoteInteger(acc, negative),
       numKind: "integer",
+      span: { start, end },
+    });
+  }
+
+  // radix (R4): base ya en `base`; valida base∈[2,36], dígitos<base, ≥1 dígito.
+  private scanRadix(start: Position, negative: boolean, base: bigint): void {
+    this.advance(); // 'r'
+    let acc = 0n;
+    let count = 0;
+    for (;;) {
+      const v = radixDigitValue(this.peek());
+      if (v === -1) break;
+      if (base >= 2n && BigInt(v) >= base) {
+        this.advance();
+        return this.error("E_RADIX_DIGIT", start, "dígito ≥ base en literal radix");
+      }
+      acc = acc * base + BigInt(v);
+      count++;
+      this.advance();
+    }
+    if (base < 2n || base > 36n) {
+      return this.error("E_RADIX_BASE", start, "base de radix fuera de [2,36]");
+    }
+    if (count === 0) {
+      return this.error("E_RADIX_NO_DIGITS", start, "literal radix sin dígitos");
+    }
+    const end = this.pos();
+    this.tokens.push({
+      type: "number",
+      lexeme: this.src.slice(start.offset, end.offset),
+      value: promoteInteger(acc, negative),
+      numKind: "integer",
+      span: { start, end },
+    });
+  }
+
+  // float (R4): value = parseFloat con `d`/`q`→`e` (parseFloat no entiende d/q).
+  private emitFloat(start: Position): void {
+    const end = this.pos();
+    const raw = this.src.slice(start.offset, end.offset);
+    const value = Number.parseFloat(raw.replace(/[dq]/i, "e"));
+    const marker = raw.match(/[edqEDQ]/)?.[0]?.toLowerCase();
+    const floatKind = marker === "d" ? "d" : marker === "q" ? "q" : marker === "e" ? "e" : undefined;
+    this.tokens.push({
+      type: "number",
+      lexeme: raw,
+      value,
+      numKind: "float",
+      ...(floatKind !== undefined ? { floatKind } : {}),
+      span: { start, end },
+    });
+  }
+
+  // scaledDecimal (R4/DEV-011): value = mantissa string (exacta), scale = dígitos
+  // fraccionales declarados tras `s`, o los de la mantissa si se omite.
+  private scanScaled(start: Position, _negative: boolean): void {
+    const mantissaEnd = this.i; // antes de consumir 's'
+    const mantissa = this.src.slice(start.offset, mantissaEnd);
+    this.advance(); // 's'
+    let scale = 0;
+    let declared = false;
+    while (isDigit(this.peek())) {
+      scale = scale * 10 + (this.peek() - ZERO);
+      declared = true;
+      this.advance();
+    }
+    if (!declared) {
+      // scale por defecto = dígitos fraccionales de la mantissa (0 si entero).
+      const dot = mantissa.indexOf(".");
+      scale = dot === -1 ? 0 : mantissa.length - dot - 1;
+    }
+    const end = this.pos();
+    this.tokens.push({
+      type: "number",
+      lexeme: this.src.slice(start.offset, end.offset),
+      value: mantissa,
+      numKind: "scaledDecimal",
+      scale,
       span: { start, end },
     });
   }
