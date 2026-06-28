@@ -255,6 +255,17 @@ describe("L2 · <Object> · copy (shallow, decisión de dialecto), error:", () =
     expect(dup.pointers[1]).toBe(7);
   });
 
+  it("copy de una CLASE preserva name/methodDict/instSize (no deja un shell roto)", () => {
+    const u = kernel();
+    const dup = send(u.Object, "copy", [], u) as import("../../src/runtime/index.js").STClass;
+    // Objeto distinto con identidad propia, pero conserva los campos de Behavior.
+    expect(dup).not.toBe(u.Object);
+    expect(dup.name).toBe(u.Object.name);
+    expect(dup.methodDict).toBe(u.Object.methodDict); // shallow: el Map se comparte.
+    expect(dup.instSize).toBe(u.Object.instSize);
+    expect(dup.superclass).toBe(u.Object.superclass);
+  });
+
   it("error: lanza un error de host observable que incluye el mensaje", () => {
     const u = kernel();
     const obj = basicNew(u.Object, u);

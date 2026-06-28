@@ -287,13 +287,18 @@ function objectPerformWithWithWith(receiver: STValue, args: STValue[], u: Univer
  */
 function objectCopy(receiver: STValue, _args: STValue[], u: Universe): STValue {
   if (typeof receiver !== "object") return receiver;
-  const dup: STObject = {
-    class: receiver.class,
-    hash: basicNew(receiver.class, u).hash, // hash fresco/único para la copia.
-    format: receiver.format,
-    pointers: receiver.pointers.slice(), // shallow: copia el array, no sus elementos.
+  // Shallow: nuevo objeto con TODOS los slots propios copiados POR REFERENCIA.
+  // El spread (no un pick parcial de {class,hash,format,pointers}) preserva los
+  // campos extra de STClass —name/superclass/methodDict/instSize— cuando el
+  // receptor es una clase; un pick parcial dejaba un shell de clase roto. El
+  // array `pointers` se copia (slice) para que la copia tenga sus propios slots
+  // indexados (sus elementos siguen compartidos: shallow). El hash NO se
+  // preserva: la copia es un objeto nuevo con identidad propia.
+  return {
+    ...receiver,
+    hash: basicNew(receiver.class, u).hash,
+    pointers: receiver.pointers.slice(),
   };
-  return dup;
 }
 
 /**
