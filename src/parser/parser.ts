@@ -192,7 +192,23 @@ class Parser {
     const messages: CascadeMsg[] = [msgToCascade(head)];
     while (this.peek().type === "semicolon") {
       this.advance(); // `;`
-      messages.push(this.parseCascadeMsg());
+      // Un mensaje de cascada SÓLO puede empezar por keyword|binary|identifier.
+      // Cualquier otro token (']', '.', eof, …) NO es un mensaje: lo dejamos sin
+      // consumir (es estructural del contexto exterior) y cortamos el bucle.
+      const next = this.peek().type;
+      if (next !== "keyword" && next !== "binarySelector" && next !== "identifier") {
+        this.error(
+          "E_UNEXPECTED_TOKEN",
+          this.peek().span,
+          `mensaje de cascada esperado tras ';': ${next}`,
+        );
+        break;
+      }
+      const msg = this.parseCascadeMsg();
+      // R12: un mensaje malformado (keyword sin arg, binary sin arg) no produce
+      // nodo; el error ya quedó registrado. No empujamos un CascadeMsg fantasma.
+      if (msg === null) break;
+      messages.push(msg);
     }
     const end = messages[messages.length - 1]?.span.end ?? head.span.end;
     return { type: "Cascade", receiver, messages, span: mkSpan(receiver.span.start, end) };
@@ -200,7 +216,10 @@ class Parser {
 
   // Un mensaje de cascada (sobre el receptor común ya conocido): unary | binary |
   // keyword. No lleva receptor propio (CascadeMsg). El span cubre selector+args.
-  private parseCascadeMsg(): CascadeMsg {
+  // Devuelve null si el mensaje resultó malformado (keyword sin arg, binary sin
+  // arg): el error ya quedó registrado y el caller NO debe empujar nodo (R12).
+  // El caller garantiza que el token actual abre un mensaje (keyword|binary|id).
+  private parseCascadeMsg(): CascadeMsg | null {
     const start = this.peek().span.start;
     if (this.peek().type === "keyword") {
       let selector = "";
@@ -219,21 +238,27 @@ class Parser {
         if (arg === null) break;
         args.push(arg);
       }
+      // Sin args válidos (el primer keyword falló): no hay mensaje keyword; el
+      // error E_KEYWORD_NO_ARG ya quedó registrado. NO acuñamos CascadeMsg fantasma
+      // con selector:'' (espejo de parseKeywordMessage: `if (args.length===0) ...`).
+      if (args.length === 0) return null;
       const end = args[args.length - 1]?.span.end ?? start;
       return { kind: "keyword", selector, args, span: mkSpan(start, end) };
     }
     if (this.peek().type === "binarySelector") {
       const op = this.advance();
       const arg = this.parseUnaryMessage();
-      const end = arg?.span.end ?? op.span.end;
+      // Arg binario malformado: no acuñamos un CascadeMsg binary con args:[] (viola
+      // la aridad 1 del contrato). El error ya lo registró parsePrimary.
+      if (arg === null) return null;
       return {
         kind: "binary",
         selector: op.lexeme,
-        args: arg === null ? [] : [arg],
-        span: mkSpan(start, end),
+        args: [arg],
+        span: mkSpan(start, arg.span.end),
       };
     }
-    // unary: un único identifier-selector.
+    // unary: un único identifier-selector (el caller garantiza el identifier).
     const sel = this.advance();
     return { kind: "unary", selector: sel.lexeme, args: [], span: mkSpan(start, sel.span.end) };
   }

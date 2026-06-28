@@ -23,6 +23,11 @@ function codes(errors: Array<ParseError | { code?: string }>): string[] {
   return errors.map((e) => (e as ParseError).code);
 }
 
+const span = (so: number, eo: number) => ({
+  start: { offset: so, line: 1, column: so + 1 },
+  end: { offset: eo, line: 1, column: eo + 1 },
+});
+
 /** Lista de astToJSON de cada statement del programa. */
 function statements(ast: ProgramNode | null): unknown[] {
   if (ast === null) throw new Error("ast es null");
@@ -110,5 +115,66 @@ describe("L1 · Parser · determinismo de paréntesis (R10)", () => {
     const r1 = parse("( )");
     const r2 = parse("( )");
     expect(r2.errors).toEqual(r1.errors);
+  });
+});
+
+/** Mensajes (astToJSON) del primer statement, asumido Cascade. */
+function cascadeMessages(ast: ProgramNode | null): Record<string, unknown>[] {
+  if (ast === null) throw new Error("ast es null");
+  const seq = astToJSON(ast.body as never) as Record<string, unknown>;
+  const s0 = (seq.statements as Record<string, unknown>[])[0] as Record<string, unknown>;
+  expect(s0?.type).toBe("Cascade");
+  return s0.messages as Record<string, unknown>[];
+}
+
+describe("L1 · Parser · cascade — sin tragarse tokens estructurales (R12/R10/cascade)", () => {
+  it("'[a foo;]' -> ']' NO se consume como selector unario; el bloque cierra sin E_UNCLOSED_BLOCK", () => {
+    const r = parse("[a foo;]");
+    expect(codes(r.errors)).not.toContain("E_UNCLOSED_BLOCK");
+    // El selector ']' NUNCA debe aparecer como mensaje de cascada.
+    expect(astString(r.ast)).not.toContain('"selector":"]"');
+  });
+
+  it("'[a b; ]' -> ']' NO se consume; sin E_UNCLOSED_BLOCK ni selector fantasma ']'", () => {
+    const r = parse("[a b; ]");
+    expect(codes(r.errors)).not.toContain("E_UNCLOSED_BLOCK");
+    expect(astString(r.ast)).not.toContain('"selector":"]"');
+  });
+
+  it("'a foo; . b' -> el '.' separador NO se traga como selector de cascada", () => {
+    const r = parse("a foo; . b");
+    expect(astString(r.ast)).not.toContain('"selector":"."');
+  });
+});
+
+describe("L1 · Parser · cascade — keyword sin arg: SIN CascadeMsg fantasma (R10/R12)", () => {
+  it("'x foo; bar:' -> E_KEYWORD_NO_ARG y messages = [unary foo] (sin keyword vacío)", () => {
+    const r = parse("x foo; bar:");
+    expect(codes(r.errors)).toContain("E_KEYWORD_NO_ARG");
+    const msgs = cascadeMessages(r.ast);
+    expect(msgs).toEqual([{ kind: "unary", selector: "foo", args: [], span: span(2, 5) }]);
+    // No debe haber ningún selector keyword vacío en el árbol.
+    expect(astString(r.ast)).not.toContain('"selector":""');
+  });
+
+  it("'x foo; bar: ]' -> sin CascadeMsg keyword fantasma con selector ''", () => {
+    const r = parse("x foo; bar: ]");
+    expect(astString(r.ast)).not.toContain('"selector":""');
+  });
+
+  it("'x foo; bar: . c' -> sin CascadeMsg keyword fantasma con selector ''", () => {
+    const r = parse("x foo; bar: . c");
+    expect(astString(r.ast)).not.toContain('"selector":""');
+  });
+});
+
+describe("L1 · Parser · cascade — binary sin arg: SIN mensaje binario malformado (arity)", () => {
+  it("'a foo; +' -> NINGÚN CascadeMsg binary con args:[] (arity 1 obligatoria)", () => {
+    const r = parse("a foo; +");
+    const msgs = cascadeMessages(r.ast);
+    // El único mensaje válido es el unary 'foo'; el '+' sin arg no produce nodo.
+    expect(msgs).toEqual([{ kind: "unary", selector: "foo", args: [], span: span(2, 5) }]);
+    // No debe existir un binary con args vacío.
+    expect(astString(r.ast)).not.toContain('"kind":"binary","selector":"+","args":[]');
   });
 });
