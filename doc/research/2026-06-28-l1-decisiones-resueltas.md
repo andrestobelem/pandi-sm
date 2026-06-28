@@ -135,7 +135,9 @@ point que no inicia token; el `:` suelto **no** es error —lexea como `colon`,
 DEV-015). **ParseError:** `E_UNEXPECTED_TOKEN`,
 `E_UNCLOSED_PAREN`, `E_UNCLOSED_BLOCK`, `E_UNCLOSED_ARRAY`, `E_UNCLOSED_BYTEARRAY`,
 `E_UNCLOSED_DYNARRAY`, `E_KEYWORD_NO_ARG`, `E_CASCADE_NO_RECEIVER`, `E_BYTE_RANGE`
-(byte∉[0,255] en `#[ ]`, origin:ingeniería). **Eliminados:** `E_NEG_NO_SPACE`
+(byte∉[0,255] en `#[ ]`, origin:ingeniería), `E_NESTING_LIMIT` (anidación que
+desborda el stack de V8; `parse()` la mapea a este error en vez de lanzar —R10
+"parse() nunca lanza", DEV-019). **Eliminados:** `E_NEG_NO_SPACE`
 (CORR-1), `E_ASSIGN_VS_KEYWORD` (CORR-2), `E_FLOAT_NO_FRACTION`, `E_SCALED_*`
 (R7), `E_LONE_COLON`/`E_INVALID_SYMBOL`/`E_BYTEARRAY_ELEMENT` (fundidos).
 
