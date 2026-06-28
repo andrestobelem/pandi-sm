@@ -22,6 +22,9 @@ lib-cov
 coverage
 *.lcov
 
+# pandi-sm CI artefacts (JUnit XML + coverage)
+reports/
+
 # nyc test coverage
 .nyc_output
 
