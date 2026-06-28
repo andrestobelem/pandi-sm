@@ -134,3 +134,109 @@ export function classOf(v: STValue, u: Universe): STClass {
   if (typeof v === "object") return v.class;
   return u.Object;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// L2-proper · instanciación + identidad (S2, plan §5.2 "instanciación e
+// identidad"). Funciones puras del modelo de objetos; L3 las cablea como
+// primitivas del kernel (basicNew, ==/~~, instVarAt:/instVarAt:put:,
+// identityHash). subclass:/new-con-initialize son KERNELLOAD/§5.4.0 (diferidos).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Contador monótono de hash por proceso; cada basicNew toma el siguiente. */
+let nextInstanceHash = 1 << 20;
+
+/**
+ * basicNew(cls) — instancia "vacía" de `cls`: un STObject con `pointers` de
+ * largo `cls.instSize`, cada slot inicializado a `u.nil` (NO undefined). No
+ * ejecuta initialize (eso es `new` = basicNew + initialize, diferido hasta que
+ * existan clases/métodos de usuario en KERNELLOAD). El hash nace estable y único.
+ */
+export function basicNew(cls: STClass, u: Universe): STObject {
+  const pointers: STValue[] = new Array(cls.instSize).fill(u.nil);
+  return {
+    class: cls,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers,
+  };
+}
+
+/** Mensaje de error determinista para un índice de ivar fuera de rango (base-1). */
+function rangeError(i: number, instSize: number): Error {
+  return new Error(`instVarAt: index ${i} fuera de rango 1..${instSize}`);
+}
+
+/**
+ * instVarAt(obj, i) — lee la ivar `i` en base-1 (Smalltalk indexa desde 1).
+ * Índice 0 o > instSize lanza un Error de host observable (range error). El
+ * Exception navegable (SystemExceptions.IndexOutOfRange) es L5, diferido.
+ */
+export function instVarAt(obj: STObject, i: number): STValue {
+  if (i < 1 || i > obj.pointers.length) throw rangeError(i, obj.pointers.length);
+  return obj.pointers[i - 1] as STValue;
+}
+
+/** instVarAtPut(obj, i, value) — escribe la ivar `i` (base-1), mismo chequeo de rango. */
+export function instVarAtPut(obj: STObject, i: number, value: STValue): STValue {
+  if (i < 1 || i > obj.pointers.length) throw rangeError(i, obj.pointers.length);
+  obj.pointers[i - 1] = value;
+  return value;
+}
+
+/**
+ * identityHash(v) — hash estable consistente con `==`. Para INMEDIATOS deriva
+ * del valor (3 == 3 => mismo hash, por valor), de modo que objetos idénticos
+ * comparten hash. Para STObjects usa el `hash` que llevan desde su creación
+ * (único por objeto, estable entre llamadas). booleans -> 1/0.
+ */
+export function identityHash(v: STValue, _u: Universe): number {
+  if (typeof v === "number") return v | 0;
+  if (typeof v === "bigint") return Number(v % 0x7fffffffn) | 0;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "string") {
+    // Hash de string estilo Java (determinista): consistente con `==` por valor.
+    let h = 0;
+    for (let i = 0; i < v.length; i++) h = (Math.imul(31, h) + v.charCodeAt(i)) | 0;
+    return h;
+  }
+  return v.hash;
+}
+
+/**
+ * identical(a, b) — semántica de `==`: identidad por referencia para STObjects,
+ * igualdad por valor para INMEDIATOS (number/bigint/string/boolean son valores
+ * nativos JS; `3 == 3` es true por valor, no por boxing). Character es L4. number
+ * y bigint con el mismo valor numérico se consideran idénticos (promoción por
+ * overflow no debe romper la identidad de un mismo entero).
+ */
+export function identical(a: STValue, b: STValue): boolean {
+  if (
+    (typeof a === "number" || typeof a === "bigint") &&
+    (typeof b === "number" || typeof b === "bigint")
+  ) {
+    return BigInt(a) === BigInt(b);
+  }
+  return a === b;
+}
+
+/** notIdentical(a, b) — semántica de `~~`: la negación de `==` por identidad/valor. */
+export function notIdentical(a: STValue, b: STValue): boolean {
+  return !identical(a, b);
+}
+
+/**
+ * lookupMethod(cls, sym) — sube la cadena de superclases buscando la primitiva
+ * de `sym`, devolviendo la definición MÁS específica (la subclase gana). La
+ * cadena termina cuando `superclass` deja de ser una clase con methodDict
+ * (Object.superclass === nil). Misma forma que el lookup de send() (L3).
+ */
+export function lookupMethod(cls: STClass, sym: SymbolId): Primitive | undefined {
+  let current: STClass | null = cls;
+  while (current !== null) {
+    const prim = current.methodDict.get(sym);
+    if (prim !== undefined) return prim;
+    const next: STClass | STObject | null = current.superclass;
+    current = next !== null && "methodDict" in next ? next : null;
+  }
+  return undefined;
+}
