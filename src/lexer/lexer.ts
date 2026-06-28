@@ -109,7 +109,11 @@ class Lexer {
 
   private simple(type: TokenType, start: Position): void {
     const end = this.pos();
-    this.tokens.push({ type, lexeme: this.src.slice(start.offset, end.offset), span: { start, end } });
+    this.tokens.push({
+      type,
+      lexeme: this.src.slice(start.offset, end.offset),
+      span: { start, end },
+    });
   }
 
   private error(code: LexErrorCode, start: Position, message: string): void {
@@ -166,27 +170,39 @@ class Lexer {
     const start = this.pos();
     const c = this.peek();
 
-    if (isDigit(c)) return this.scanNumber(start, false);
-    if (isLetter(c)) return this.scanIdentifierOrKeyword(start);
+    if (isDigit(c)) {
+      this.scanNumber(start, false);
+      return;
+    }
+    if (isLetter(c)) {
+      this.scanIdentifierOrKeyword(start);
+      return;
+    }
 
     switch (c) {
       case CP_COLON:
-        return this.scanColonOrAssign(start);
+        this.scanColonOrAssign(start);
+        return;
       case 0x5e: // ^
         this.advance();
-        return this.simple("returnOperator", start);
+        this.simple("returnOperator", start);
+        return;
       case 0x28: // (
         this.advance();
-        return this.simple("lparen", start);
+        this.simple("lparen", start);
+        return;
       case 0x29: // )
         this.advance();
-        return this.simple("rparen", start);
+        this.simple("rparen", start);
+        return;
       case 0x5b: // [
         this.advance();
-        return this.simple("lbracket", start);
+        this.simple("lbracket", start);
+        return;
       case 0x5d: // ]
         this.advance();
-        return this.simple("rbracket", start);
+        this.simple("rbracket", start);
+        return;
       case 0x7b: // {  (ext)
         this.advance();
         this.tokens.push({
@@ -207,16 +223,21 @@ class Lexer {
         return;
       case 0x2e: // .
         this.advance();
-        return this.simple("period", start);
+        this.simple("period", start);
+        return;
       case 0x3b: // ;
         this.advance();
-        return this.simple("semicolon", start);
+        this.simple("semicolon", start);
+        return;
       case CP_APOSTROPHE: // ' → string (R5/slice3)
-        return this.scanString(start);
+        this.scanString(start);
+        return;
       case CP_DOLLAR: // $ → character (R5/slice3)
-        return this.scanCharacter(start);
+        this.scanCharacter(start);
+        return;
       case 0x23: // # → arrayOpen / byteArrayOpen / symbol (R6/R12/slice4)
-        return this.scanHash(start);
+        this.scanHash(start);
+        return;
     }
 
     // `-` negativo léxico (R2/CORR-1): sólo si va pegado a dígito (o `.`dígito) Y
@@ -224,13 +245,21 @@ class Lexer {
     // ⇒ `--`, `-=`). DEBE ir ANTES del fallthrough de BINARY_CHARS.
     if (c === CP_MINUS && this.operandPosition() && this.startsNumberAfterSign()) {
       this.advance(); // '-'
-      return this.scanNumber(start, true);
+      this.scanNumber(start, true);
+      return;
     }
 
-    if (BINARY_CHARS.has(c)) return this.scanBinarySelector(start);
+    if (BINARY_CHARS.has(c)) {
+      this.scanBinarySelector(start);
+      return;
+    }
 
     this.advance();
-    this.error("E_UNEXPECTED_CHAR", start, `carácter inesperado: ${JSON.stringify(String.fromCodePoint(c))}`);
+    this.error(
+      "E_UNEXPECTED_CHAR",
+      start,
+      `carácter inesperado: ${JSON.stringify(String.fromCodePoint(c))}`,
+    );
   }
 
   private scanIdentifierOrKeyword(start: Position): void {
@@ -238,25 +267,27 @@ class Lexer {
     // keyword = identifier ':' pegado, salvo que sea ':=' (R3).
     if (this.peek() === CP_COLON && this.cpAt(this.i + 1) !== CP_EQUALS) {
       this.advance(); // ':'
-      return this.simple("keyword", start);
+      this.simple("keyword", start);
+      return;
     }
-    return this.simple("identifier", start);
+    this.simple("identifier", start);
   }
 
   private scanColonOrAssign(start: Position): void {
     this.advance(); // ':'
     if (this.peek() === CP_EQUALS) {
       this.advance(); // '='
-      return this.simple("assignmentOperator", start);
+      this.simple("assignmentOperator", start);
+      return;
     }
-    return this.simple("colon", start);
+    this.simple("colon", start);
   }
 
   private scanBinarySelector(start: Position): void {
     while (BINARY_CHARS.has(this.peek())) this.advance();
     // `|` aislado => verticalBar; runs más largos (`||`, `<=`) => binarySelector (R10/lexical §4.4).
     const lexeme = this.src.slice(start.offset, this.i);
-    return this.simple(lexeme === "|" ? "verticalBar" : "binarySelector", start);
+    this.simple(lexeme === "|" ? "verticalBar" : "binarySelector", start);
   }
 
   // Posición de operando (R2): el `-` inicia literal negativo sólo si el token
@@ -279,7 +310,10 @@ class Lexer {
       case "verticalBar":
         return true;
       default:
-        return false; // number/identifier/`)`/`]`/`}`/string/char/symbol/colon…
+        // number/identifier/`)`/`]`/`}`/string/char/symbol/colon… y también
+        // `byteArrayOpen` (`#[`): sus elementos son bytes sin signo, un negativo
+        // no es operando válido (DEV-016) — asimetría deliberada con `arrayOpen`.
+        return false;
     }
   }
 
@@ -301,7 +335,8 @@ class Lexer {
 
     // radix (R4): `<base>r<digits>` — acumula en BigInt, degrada por magnitud.
     if (this.peek() === CP_R) {
-      return this.scanRadix(start, negative, acc);
+      this.scanRadix(start, negative, acc);
+      return;
     }
 
     // fracción (R7): `.` se consume sólo si va seguido de dígito (puede ser de un
@@ -315,7 +350,10 @@ class Lexer {
 
     // scaledDecimal (R4/DEV-011): sufijo `s` cierra la mantissa con scale opcional.
     // Tiene prioridad sobre el exponente (un scaledDecimal no lleva e/d/q).
-    if (this.peek() === CP_S) return this.scanScaled(start, negative);
+    if (this.peek() === CP_S) {
+      this.scanScaled(start, negative);
+      return;
+    }
 
     // exponente (R7): `e`/`d`/`q` consumido sólo si va seguido de `[+-]?digit`.
     if (isExponentMarker(this.peek())) {
@@ -331,12 +369,16 @@ class Lexer {
         // `1.5e+` / `1e-`: letra+signo SIN dígito ⇒ negativo real (R7/R10).
         this.advance(); // letra
         this.advance(); // signo
-        return this.error("E_EXPONENT_MALFORMED", start, "exponente sin dígitos");
+        this.error("E_EXPONENT_MALFORMED", start, "exponente sin dígitos");
+        return;
       }
       // si no hay dígito y no hay signo: backtrack — la letra queda como identifier.
     }
 
-    if (isFloat) return this.emitFloat(start);
+    if (isFloat) {
+      this.emitFloat(start);
+      return;
+    }
 
     // entero decimal (R4).
     const end = this.pos();
@@ -363,17 +405,20 @@ class Lexer {
       if (base >= 2n && BigInt(v) >= base) {
         if (count > 0) break;
         this.advance();
-        return this.error("E_RADIX_DIGIT", start, "dígito ≥ base en literal radix");
+        this.error("E_RADIX_DIGIT", start, "dígito ≥ base en literal radix");
+        return;
       }
       acc = acc * base + BigInt(v);
       count++;
       this.advance();
     }
     if (base < 2n || base > 36n) {
-      return this.error("E_RADIX_BASE", start, "base de radix fuera de [2,36]");
+      this.error("E_RADIX_BASE", start, "base de radix fuera de [2,36]");
+      return;
     }
     if (count === 0) {
-      return this.error("E_RADIX_NO_DIGITS", start, "literal radix sin dígitos");
+      this.error("E_RADIX_NO_DIGITS", start, "literal radix sin dígitos");
+      return;
     }
     const end = this.pos();
     this.tokens.push({
@@ -391,7 +436,8 @@ class Lexer {
     const raw = this.src.slice(start.offset, end.offset);
     const value = Number.parseFloat(raw.replace(/[dq]/i, "e"));
     const marker = raw.match(/[edqEDQ]/)?.[0]?.toLowerCase();
-    const floatKind = marker === "d" ? "d" : marker === "q" ? "q" : marker === "e" ? "e" : undefined;
+    const floatKind =
+      marker === "d" ? "d" : marker === "q" ? "q" : marker === "e" ? "e" : undefined;
     this.tokens.push({
       type: "number",
       lexeme: raw,

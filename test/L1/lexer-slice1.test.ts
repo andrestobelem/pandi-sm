@@ -88,14 +88,9 @@ describe("L1 · lexer slice 1", () => {
     expect(first("}").origin).toBe("ext:pharo-squeak");
   });
 
-  it("descarta comentarios `\"...\"` (con escape `\"\"`)", () => {
-    expect(types('3 "un comentario" + 4')).toEqual([
-      "number",
-      "binarySelector",
-      "number",
-      "eof",
-    ]);
-    expect(types('1 "con \"\" comilla" 2')).toEqual(["number", "number", "eof"]);
+  it('descarta comentarios `"..."` (con escape `""`)', () => {
+    expect(types('3 "un comentario" + 4')).toEqual(["number", "binarySelector", "number", "eof"]);
+    expect(types('1 "con "" comilla" 2')).toEqual(["number", "number", "eof"]);
   });
 
   it("reporta errores deterministas (no excepciones)", () => {

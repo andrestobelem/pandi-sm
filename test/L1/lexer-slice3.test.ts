@@ -99,11 +99,11 @@ describe("L1 · lexer slice 3 — character", () => {
 
   it("carácter astral $🎉 → value contiene el code point completo (decisions-modelo (a))", () => {
     const emoji = "🎉"; // U+1F389, surrogate pair en UTF-16
-    const t = first("$" + emoji);
+    const t = first(`$${emoji}`);
     expect(t.type).toBe("character");
     expect(t.value).toBe(emoji);
     // lexema incluye el dólar y los dos code units del emoji
-    expect(t.lexeme).toBe("$" + emoji);
+    expect(t.lexeme).toBe(`$${emoji}`);
   });
 
   it("$ al final de input → E_UNTERMINATED_CHAR (sin excepción)", () => {
