@@ -8,6 +8,7 @@ import type {
   AssignmentNode,
   BlockNode,
   CascadeMsg,
+  DynamicArrayNode,
   Expression,
   LiteralKind,
   LiteralNode,
@@ -35,7 +36,10 @@ class Parser {
   private i = 0;
   readonly errors: ParseError[] = [];
 
-  constructor(private readonly tokens: Token[]) {}
+  constructor(
+    private readonly tokens: Token[],
+    private readonly source: string,
+  ) {}
 
   private peek(offset = 0): Token {
     // El lexer SIEMPRE termina con un token `eof`, así que el índice clampado a
@@ -281,6 +285,12 @@ class Parser {
         return this.parseParenExpr();
       case "lbracket":
         return this.parseBlock();
+      case "arrayOpen":
+        return this.parseLiteralArray();
+      case "byteArrayOpen":
+        return this.parseByteArray();
+      case "dynArrayOpen":
+        return this.parseDynamicArray();
       default:
         // Token inesperado donde se esperaba un primary: rechazo determinista.
         this.error("E_UNEXPECTED_TOKEN", t.span, `token inesperado: ${t.type}`);
@@ -328,6 +338,179 @@ class Parser {
       "bloque sin cerrar",
     );
     return { type: "Block", params, body, span: mkSpan(open.span.start, this.peek().span.end) };
+  }
+
+  // literalArray ::= `#(` element* `)`. Cada elemento es un LITERAL (R5/R11):
+  // nil/true/false reificados DENTRO del array (asimetría con nivel expresión);
+  // barewords / keyword-runs / binarySelector => símbolos; `#(`/`(` anidan en
+  // array; `#[` anida en byteArray. ANSI: origin "ansi" => astToJSON lo OMITE.
+  // E_UNCLOSED_ARRAY si falta `)`.
+  private parseLiteralArray(): LiteralNode {
+    const open = this.advance(); // `#(`
+    const elements: LiteralNode[] = [];
+    while (this.peek().type !== "rparen" && !this.atEnd) {
+      elements.push(this.parseArrayElement());
+    }
+    return this.closeArrayLiteral(open, "array", "rparen", elements, "E_UNCLOSED_ARRAY");
+  }
+
+  // Un elemento de literalArray: literal numérico/string/character; nil/true/false
+  // reificados (R5); otros identifiers / keyword-runs / binarySelector => símbolo;
+  // `#(`/`(` => array anidado; `#[` => byteArray anidado.
+  private parseArrayElement(): LiteralNode {
+    const t = this.peek();
+    switch (t.type) {
+      case "number":
+        return this.numberLiteral(this.advance());
+      case "string":
+        return this.simpleLiteral(this.advance(), "string");
+      case "character":
+        return this.simpleLiteral(this.advance(), "character");
+      case "symbol":
+        return this.simpleLiteral(this.advance(), "symbol");
+      case "arrayOpen":
+        return this.parseLiteralArray();
+      case "lparen":
+        return this.parseNestedParenArray();
+      case "byteArrayOpen":
+        return this.parseByteArray();
+      case "identifier":
+        return this.reservedOrSymbol(this.advance());
+      case "binarySelector":
+        return this.symbolLiteral(this.advance());
+      case "keyword":
+        return this.keywordRunSymbol();
+      default: {
+        // Token inesperado donde se esperaba un elemento de array.
+        const bad = this.advance();
+        this.error("E_UNEXPECTED_TOKEN", bad.span, `elemento de array inesperado: ${bad.type}`);
+        return this.symbolLiteral(bad);
+      }
+    }
+  }
+
+  // `(` dentro de `#( )` es un array anidado (NO agrupación); mismo cierre `)`.
+  private parseNestedParenArray(): LiteralNode {
+    const open = this.advance(); // `(`
+    const elements: LiteralNode[] = [];
+    while (this.peek().type !== "rparen" && !this.atEnd) {
+      elements.push(this.parseArrayElement());
+    }
+    return this.closeArrayLiteral(open, "array", "rparen", elements, "E_UNCLOSED_ARRAY");
+  }
+
+  // R5: nil/true/false bareword DENTRO de array => literal reservado reificado;
+  // cualquier otro identifier => símbolo.
+  private reservedOrSymbol(t: Token): LiteralNode {
+    const reserved: Record<string, { lit: LiteralKind; value: boolean | null }> = {
+      nil: { lit: "nil", value: null },
+      true: { lit: "true", value: true },
+      false: { lit: "false", value: false },
+    };
+    const r = reserved[t.lexeme];
+    if (r !== undefined) {
+      return { type: "Literal", lit: r.lit, raw: t.lexeme, value: r.value, span: t.span };
+    }
+    return this.symbolLiteral(t);
+  }
+
+  // keyword-run dentro de array: `at:put:` (dos tokens keyword) => un único símbolo
+  // `at:put:` (lexema concatenado; el `:` ya viene incluido en cada keyword).
+  private keywordRunSymbol(): LiteralNode {
+    const start = this.peek().span.start;
+    let raw = "";
+    let end = start;
+    while (this.peek().type === "keyword") {
+      const kw = this.advance();
+      raw += kw.lexeme;
+      end = kw.span.end;
+    }
+    return { type: "Literal", lit: "symbol", raw, value: raw, span: mkSpan(start, end) };
+  }
+
+  private symbolLiteral(t: Token): LiteralNode {
+    return { type: "Literal", lit: "symbol", raw: t.lexeme, value: t.lexeme, span: t.span };
+  }
+
+  // byteArray ::= `#[` integer* `]`. Cada elemento debe ser un entero en [0,255]
+  // (E_BYTE_RANGE si excede; un `-` no es entero => E_UNEXPECTED_TOKEN, DEV-016).
+  // origin ext:pharo-squeak (astToJSON lo EMITE). E_UNCLOSED_BYTEARRAY si falta `]`.
+  private parseByteArray(): LiteralNode {
+    const open = this.advance(); // `#[`
+    const elements: LiteralNode[] = [];
+    while (this.peek().type !== "rbracket" && !this.atEnd) {
+      const t = this.peek();
+      if (t.type === "number" && t.numKind === "integer") {
+        this.advance();
+        if (typeof t.value === "number" && (t.value < 0 || t.value > 255)) {
+          this.error("E_BYTE_RANGE", t.span, `byte fuera de rango [0,255]: ${t.lexeme}`);
+        }
+        elements.push(this.numberLiteral(t));
+      } else {
+        this.advance();
+        this.error("E_UNEXPECTED_TOKEN", t.span, `byte no entero: ${t.type}`);
+      }
+    }
+    const node = this.closeArrayLiteral(
+      open,
+      "byteArray",
+      "rbracket",
+      elements,
+      "E_UNCLOSED_BYTEARRAY",
+    );
+    node.origin = "ext:pharo-squeak";
+    return node;
+  }
+
+  // Cierre común de literalArray/byteArray: consume el cierre y arma el nodo, o
+  // emite el error de "sin cerrar" con span desde la apertura. raw = slice fuente.
+  private closeArrayLiteral(
+    open: Token,
+    lit: LiteralKind,
+    close: "rparen" | "rbracket",
+    elements: LiteralNode[],
+    unclosed: ParseErrorCode,
+  ): LiteralNode {
+    if (this.peek().type === close) {
+      const end = this.advance().span.end;
+      const span = mkSpan(open.span.start, end);
+      return { type: "Literal", lit, raw: this.slice(span), elements, span };
+    }
+    const span = mkSpan(open.span.start, this.peek().span.end);
+    this.error(unclosed, span, `array sin cerrar (${lit})`);
+    return { type: "Literal", lit, raw: this.slice(span), elements, span };
+  }
+
+  // dynamicArray ::= `{` (expression (`.` expression)* `.`?) `}`. Los elementos son
+  // EXPRESIONES completas (no literales). origin ext:pharo-squeak (astToJSON EMITE).
+  // E_UNCLOSED_DYNARRAY si falta `}`.
+  private parseDynamicArray(): DynamicArrayNode {
+    const open = this.advance(); // `{`
+    const elements: Expression[] = [];
+    while (this.peek().type !== "dynArrayClose" && !this.atEnd) {
+      elements.push(this.parseExpression());
+      if (this.peek().type === "period") {
+        this.advance();
+      } else {
+        break;
+      }
+    }
+    if (this.peek().type === "dynArrayClose") {
+      const end = this.advance().span.end;
+      return {
+        type: "DynamicArray",
+        elements,
+        origin: "ext:pharo-squeak",
+        span: mkSpan(open.span.start, end),
+      };
+    }
+    const span = mkSpan(open.span.start, this.peek().span.end);
+    this.error("E_UNCLOSED_DYNARRAY", span, "array dinámico sin cerrar");
+    return { type: "DynamicArray", elements, origin: "ext:pharo-squeak", span };
+  }
+
+  private slice(span: SourceSpan): string {
+    return this.source.slice(span.start.offset, span.end.offset);
   }
 
   private numberLiteral(t: Token): LiteralNode {
@@ -391,7 +574,7 @@ export function parse(source: string): {
   errors: Array<LexError | ParseError>;
 } {
   const lexed = tokenize(source);
-  const parser = new Parser(lexed.tokens);
+  const parser = new Parser(lexed.tokens, source);
   const ast = parser.parseProgram();
   return { ast, errors: [...lexed.errors, ...parser.errors] };
 }
