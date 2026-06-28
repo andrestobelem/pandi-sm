@@ -3,7 +3,8 @@
 // identifier/keyword/`:=`/`:`, decimalInteger (+ promoción BigInt), binarySelector/`|`.
 // SLICE 2: número completo — radix/float (e/d/q)/scaledDecimal + `-` negativo por
 // posición (R2/CORR-1), backtrack de exponente y E_EXPONENT_MALFORMED (R7).
-// Pendiente (slices siguientes): strings, `$c`, símbolos, #( ) #[ ].
+// SLICE 3: strings `'...'` (escape `''`) y caracteres `$c` (surrogate-safe).
+// Pendiente (slices siguientes): símbolos, #( ) #[ ].
 
 import type { Position } from "../ast/nodes.js";
 import type { LexError, LexErrorCode } from "./errors.js";
@@ -14,6 +15,8 @@ const CP_CR = 0x0d;
 const CP_COLON = 0x3a;
 const CP_EQUALS = 0x3d;
 const CP_QUOTE = 0x22; // "
+const CP_APOSTROPHE = 0x27; // '
+const CP_DOLLAR = 0x24; // $
 const CP_MINUS = 0x2d; // -
 const CP_PERIOD = 0x2e; // .
 const CP_R = 0x72; // r (radix)
@@ -208,6 +211,10 @@ class Lexer {
       case 0x3b: // ;
         this.advance();
         return this.simple("semicolon", start);
+      case CP_APOSTROPHE: // ' → string (R5/slice3)
+        return this.scanString(start);
+      case CP_DOLLAR: // $ → character (R5/slice3)
+        return this.scanCharacter(start);
     }
 
     // `-` negativo léxico (R2/CORR-1): sólo si va pegado a dígito (o `.`dígito) Y
@@ -385,6 +392,59 @@ class Lexer {
       value,
       numKind: "float",
       ...(floatKind !== undefined ? { floatKind } : {}),
+      span: { start, end },
+    });
+  }
+
+  // string (slice3): '...' con escape '' para comilla literal (R5).
+  // value = contenido DESESCAPADO; lexeme = fuente crudo incluyendo comillas.
+  private scanString(start: Position): void {
+    this.advance(); // comilla de apertura
+    let value = "";
+    for (;;) {
+      if (this.atEnd) {
+        this.error("E_UNTERMINATED_STRING", start, "string sin cerrar");
+        return;
+      }
+      const c = this.peek();
+      if (c === CP_APOSTROPHE) {
+        this.advance(); // comilla
+        if (this.peek() === CP_APOSTROPHE) {
+          // '' → comilla literal
+          this.advance();
+          value += "'";
+          continue;
+        }
+        // comilla de cierre
+        break;
+      }
+      value += String.fromCodePoint(c);
+      this.advance();
+    }
+    const end = this.pos();
+    this.tokens.push({
+      type: "string",
+      lexeme: this.src.slice(start.offset, end.offset),
+      value,
+      span: { start, end },
+    });
+  }
+
+  // character (slice3): $c — consume un code point completo vía advance() (surrogate-safe,
+  // decisions-modelo (a)). `$` al final de input → E_UNTERMINATED_CHAR.
+  private scanCharacter(start: Position): void {
+    this.advance(); // '$'
+    if (this.atEnd) {
+      this.error("E_UNTERMINATED_CHAR", start, "carácter sin valor");
+      return;
+    }
+    const cp = this.peek();
+    this.advance(); // code point (BMP o astral)
+    const end = this.pos();
+    this.tokens.push({
+      type: "character",
+      lexeme: this.src.slice(start.offset, end.offset),
+      value: String.fromCodePoint(cp),
       span: { start, end },
     });
   }
