@@ -63,6 +63,27 @@ class Parser {
     this.errors.push({ code, span, message });
   }
 
+  // ¿El token actual puede ABRIR un primary? (literal | variable | `(` | `[` |
+  // `#(` | `#[` | `{`). Sirve al guard de arg de keyword (E_KEYWORD_NO_ARG) y a
+  // la detección de paréntesis vacío `( )` — evita inventar un Variable fantasma.
+  private startsPrimary(offset = 0): boolean {
+    switch (this.peek(offset).type) {
+      case "number":
+      case "string":
+      case "character":
+      case "symbol":
+      case "identifier":
+      case "lparen":
+      case "lbracket":
+      case "arrayOpen":
+      case "byteArrayOpen":
+      case "dynArrayOpen":
+        return true;
+      default:
+        return false;
+    }
+  }
+
   // ── Programa / secuencia ────────────────────────────────────────────────
   // program ::= sequence (hasta eof). La Sequence es el ÚNICO hogar de las
   // temporaries (R13/DEV-012). La fuente vacía da una Sequence vacía.
@@ -83,7 +104,9 @@ class Parser {
     const statements: Statement[] = [];
     while (!this.atClose(close)) {
       const stmt = this.parseStatement();
-      statements.push(stmt);
+      // R12: un statement malformado (sin primary) no produce nodo; el error ya
+      // quedó registrado. No empujamos nodos fantasma al árbol.
+      if (stmt !== null) statements.push(stmt);
       // Target no asignable (CORR-2/DEV-010, R8): si tras parsear el statement
       // queda un `:=` sin consumir, el target no era un identifier simple
       // (`3 := 4`, `a foo := 1`) => `:=` inesperado. Determinista por code+span.
@@ -98,7 +121,7 @@ class Parser {
         break;
       }
       // R13: `^expr` es TERMINAL — tras su `.` opcional sólo cabe el cierre.
-      if (stmt.type === "Return" && !this.atClose(close)) {
+      if (stmt?.type === "Return" && !this.atClose(close)) {
         const t = this.peek();
         this.error("E_UNEXPECTED_TOKEN", t.span, `statement tras ^ terminal (R13): ${t.type}`);
         break;
@@ -126,10 +149,13 @@ class Parser {
   }
 
   // statement ::= `^` expression  |  expression. `^expr` => ReturnNode.
-  private parseStatement(): Statement {
+  // Devuelve null si la expresión está malformada (sin primary): el error ya se
+  // registró y NO se acuña un Return/Variable fantasma (R12).
+  private parseStatement(): Statement | null {
     if (this.peek().type === "returnOperator") {
       const caret = this.advance();
       const value = this.parseExpression();
+      if (value === null) return null; // `^` sin expresión: sin nodo Return.
       return { type: "Return", value, span: mkSpan(caret.span.start, value.span.end) };
     }
     return this.parseExpression();
@@ -137,7 +163,8 @@ class Parser {
 
   // expression ::= assignment | cascade. Assignment SÓLO cuando hay un identifier
   // seguido de `:=` (right-assoc). En otro caso, cascade (que envuelve al mensaje).
-  private parseExpression(): Expression {
+  // null si la expresión no tiene primary (token inesperado ya reportado).
+  private parseExpression(): Expression | null {
     if (this.peek().type === "identifier" && this.peek(1).type === "assignmentOperator") {
       return this.parseAssignment();
     }
@@ -148,8 +175,9 @@ class Parser {
   // MessageSend; su receptor pasa a ser CascadeNode.receiver y el propio head se
   // descompone en el primer CascadeMsg (kind/selector/args, SIN receptor). Cada `;`
   // siguiente parsea un mensaje más (unary|binary|keyword) sobre ese mismo receptor.
-  private parseCascade(): Expression {
+  private parseCascade(): Expression | null {
     const head = this.parseKeywordMessage();
+    if (head === null) return null;
     if (this.peek().type !== "semicolon") return head;
     // El head debe ser un MessageSend para poder descomponerlo (R9).
     if (head.type !== "MessageSend") {
@@ -178,8 +206,18 @@ class Parser {
       let selector = "";
       const args: Expression[] = [];
       while (this.peek().type === "keyword") {
+        const kw = this.peek();
+        // R10: cada keyword exige un arg que abra primary; si no, E_KEYWORD_NO_ARG
+        // en el span del keyword y se detiene SIN arg fantasma.
+        if (!this.startsPrimary(1)) {
+          this.advance(); // consumimos el keyword para no reciclarlo
+          this.error("E_KEYWORD_NO_ARG", kw.span, `keyword sin argumento: ${kw.lexeme}`);
+          break;
+        }
         selector += this.advance().lexeme; // el lexema ya incluye el `:`.
-        args.push(this.parseBinaryMessage());
+        const arg = this.parseBinaryMessage();
+        if (arg === null) break;
+        args.push(arg);
       }
       const end = args[args.length - 1]?.span.end ?? start;
       return { kind: "keyword", selector, args, span: mkSpan(start, end) };
@@ -187,11 +225,12 @@ class Parser {
     if (this.peek().type === "binarySelector") {
       const op = this.advance();
       const arg = this.parseUnaryMessage();
+      const end = arg?.span.end ?? op.span.end;
       return {
         kind: "binary",
         selector: op.lexeme,
-        args: [arg],
-        span: mkSpan(start, arg.span.end),
+        args: arg === null ? [] : [arg],
+        span: mkSpan(start, end),
       };
     }
     // unary: un único identifier-selector.
@@ -203,25 +242,42 @@ class Parser {
   // El target sólo puede ser un identifier (R8/CORR-2); un target no-variable
   // (p.ej. `3 := 4`, `a foo := 1`) se detecta en parseKeywordMessage: al volver,
   // el `:=` sobrante queda sin consumir y es E_UNEXPECTED_TOKEN.
-  private parseAssignment(): AssignmentNode {
+  // Devuelve null si el rhs está malformado (sin primary): el error de
+  // parsePrimary ya se registró y NO se acuña un Assignment con value fantasma.
+  private parseAssignment(): AssignmentNode | null {
     const target = this.variable(this.advance()); // identifier
     this.advance(); // `:=`
     const value = this.parseExpression();
+    if (value === null) return null;
     return { type: "Assignment", target, value, span: mkSpan(target.span.start, value.span.end) };
   }
 
   // keyword-message ::= binary-message (keyword binary-message)*  — liga más flojo.
-  private parseKeywordMessage(): Expression {
+  private parseKeywordMessage(): Expression | null {
     const receiver = this.parseBinaryMessage();
+    if (receiver === null) return null;
     if (this.peek().type !== "keyword") return receiver;
     const msgStart = this.peek().span.start; // inicio del primer keyword (R9 cascade).
     let selector = "";
     const args: Expression[] = [];
     while (this.peek().type === "keyword") {
-      const kw = this.advance(); // el lexema ya incluye el `:` final (`at:`).
+      const kw = this.peek();
+      // R10: el keyword exige un arg que abra primary; si no, E_KEYWORD_NO_ARG en
+      // el span del keyword y se detiene SIN inyectar un arg fantasma.
+      if (!this.startsPrimary(1)) {
+        this.advance(); // consumimos el keyword (no se recicla)
+        this.error("E_KEYWORD_NO_ARG", kw.span, `keyword sin argumento: ${kw.lexeme}`);
+        break;
+      }
+      this.advance(); // el lexema ya incluye el `:` final (`at:`).
       selector += kw.lexeme;
-      args.push(this.parseBinaryMessage());
+      const arg = this.parseBinaryMessage();
+      if (arg === null) break;
+      args.push(arg);
     }
+    // Sin args válidos (el primer keyword falló): no hay envío keyword; devolvemos
+    // el receptor tal cual (el error E_KEYWORD_NO_ARG ya quedó registrado).
+    if (args.length === 0) return receiver;
     const end = args[args.length - 1]?.span.end ?? receiver.span.end;
     const node = msg("keyword", receiver, selector, args, mkSpan(receiver.span.start, end));
     msgSpans.set(node, mkSpan(msgStart, end)); // span sólo-mensaje (para cascada R9).
@@ -230,11 +286,13 @@ class Parser {
 
   // binary-message ::= unary-message (binarySelector unary-message)*  — left-assoc,
   // SIN precedencia entre binarios (R8). `|` aislado es `verticalBar`, NO binario.
-  private parseBinaryMessage(): Expression {
+  private parseBinaryMessage(): Expression | null {
     let receiver = this.parseUnaryMessage();
+    if (receiver === null) return null;
     while (this.peek().type === "binarySelector") {
       const op = this.advance();
       const arg = this.parseUnaryMessage();
+      if (arg === null) break; // arg malformado: error ya registrado, no acuñar envío.
       const node = msg(
         "binary",
         receiver,
@@ -249,8 +307,9 @@ class Parser {
   }
 
   // unary-message ::= primary (identifier)*  — liga más fuerte. R8: sin lookahead.
-  private parseUnaryMessage(): Expression {
+  private parseUnaryMessage(): Expression | null {
     let receiver = this.parsePrimary();
+    if (receiver === null) return null;
     while (this.peek().type === "identifier") {
       const sel = this.advance();
       const node = msg(
@@ -267,7 +326,10 @@ class Parser {
   }
 
   // primary ::= literal | variable | `(` expression `)`.
-  private parsePrimary(): Expression {
+  // Devuelve null si el token actual NO abre un primary (R12): emite
+  // E_UNEXPECTED_TOKEN y NO acuña un Variable con el lexema rechazado ni consume
+  // el sentinela eof. El caller omite el slot malformado.
+  private parsePrimary(): Expression | null {
     const t = this.peek();
     switch (t.type) {
       case "number":
@@ -291,16 +353,29 @@ class Parser {
         return this.parseByteArray();
       case "dynArrayOpen":
         return this.parseDynamicArray();
-      default:
+      default: {
         // Token inesperado donde se esperaba un primary: rechazo determinista.
+        // No acuñamos un Variable del lexema rechazado (R12) ni consumimos el
+        // sentinela eof; consumimos sólo un token real para garantizar progreso.
         this.error("E_UNEXPECTED_TOKEN", t.span, `token inesperado: ${t.type}`);
-        return this.variable(this.advance());
+        if (!this.atEnd) this.advance();
+        return null;
+      }
     }
   }
 
   // `(` expression `)` — agrupación (no genera nodo); E_UNCLOSED_PAREN si falta `)`.
-  private parseParenExpr(): Expression {
+  // Determinismo (R10): un grupo vacío `( )`/`()` es UN solo error. Si el interior
+  // no abre primary, emitimos E_UNCLOSED_PAREN (causa raíz: grupo sin expresión) y
+  // consumimos el `)` si está, en vez de delegar en parsePrimary (que duplicaría el
+  // diagnóstico con E_UNEXPECTED_TOKEN sobre el mismo `)`).
+  private parseParenExpr(): Expression | null {
     const open = this.advance(); // `(`
+    if (!this.startsPrimary()) {
+      const end = this.peek().type === "rparen" ? this.advance().span.end : this.peek().span.end;
+      this.error("E_UNCLOSED_PAREN", mkSpan(open.span.start, end), "paréntesis vacío");
+      return null;
+    }
     const inner = this.parseExpression();
     if (this.peek().type === "rparen") {
       this.advance();
@@ -488,7 +563,9 @@ class Parser {
     const open = this.advance(); // `{`
     const elements: Expression[] = [];
     while (this.peek().type !== "dynArrayClose" && !this.atEnd) {
-      elements.push(this.parseExpression());
+      const el = this.parseExpression();
+      if (el === null) break; // elemento malformado: error ya registrado.
+      elements.push(el);
       if (this.peek().type === "period") {
         this.advance();
       } else {
