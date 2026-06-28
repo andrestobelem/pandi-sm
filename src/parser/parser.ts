@@ -103,6 +103,7 @@ class Parser {
     const temporaries = this.parseTemporaries();
     const statements: Statement[] = [];
     while (!this.atClose(close)) {
+      const before = this.i;
       const stmt = this.parseStatement();
       // R12: un statement malformado (sin primary) no produce nodo; el error ya
       // quedó registrado. No empujamos nodos fantasma al árbol.
@@ -114,18 +115,29 @@ class Parser {
         this.error("E_UNEXPECTED_TOKEN", this.peek().span, "target no asignable: :=");
         break;
       }
-      // Separador de statements: `.`. Sin `.` el statement debe ser el último.
+      // Separador de statements: `.`.
       if (this.peek().type === "period") {
         this.advance();
-      } else {
-        break;
+        // R13: `^expr` es TERMINAL — tras su `.` opcional sólo cabe el cierre.
+        if (stmt?.type === "Return" && !this.atClose(close)) {
+          const t = this.peek();
+          this.error("E_UNEXPECTED_TOKEN", t.span, `statement tras ^ terminal (R13): ${t.type}`);
+          break;
+        }
+        continue;
       }
-      // R13: `^expr` es TERMINAL — tras su `.` opcional sólo cabe el cierre.
-      if (stmt?.type === "Return" && !this.atClose(close)) {
+      // Sin `.` pero en el cierre: este statement era el último (fin normal).
+      if (this.atClose(close)) break;
+      // Ni `.` ni cierre: SEPARADOR OMITIDO con tokens por delante. NO es "sin
+      // cerrar": reportamos token inesperado (R10, rechazo determinista) y nos
+      // recuperamos continuando, para no perder el cierre ni los statements
+      // siguientes. Si el statement no avanzó el cursor (malformado), forzamos
+      // avance para garantizar progreso del bucle.
+      if (stmt !== null) {
         const t = this.peek();
-        this.error("E_UNEXPECTED_TOKEN", t.span, `statement tras ^ terminal (R13): ${t.type}`);
-        break;
+        this.error("E_UNEXPECTED_TOKEN", t.span, `se esperaba '.' o cierre: ${t.type}`);
       }
+      if (this.i === before) this.advance();
     }
     const end = this.peek().span.start;
     return { type: "Sequence", temporaries, statements, span: mkSpan(start, end) };
@@ -588,14 +600,22 @@ class Parser {
     const open = this.advance(); // `{`
     const elements: Expression[] = [];
     while (this.peek().type !== "dynArrayClose" && !this.atEnd) {
+      const before = this.i;
       const el = this.parseExpression();
-      if (el === null) break; // elemento malformado: error ya registrado.
-      elements.push(el);
+      if (el !== null) elements.push(el);
       if (this.peek().type === "period") {
         this.advance();
-      } else {
-        break;
+        continue;
       }
+      if (this.peek().type === "dynArrayClose" || this.atEnd) break;
+      // Ni `.` ni `}`: separador omitido con el cierre aún por delante. NO es "sin
+      // cerrar": reportamos token inesperado (R10) y recuperamos, sin perder `}`
+      // ni los elementos siguientes. Progreso garantizado si el elemento no avanzó.
+      if (el !== null) {
+        const t = this.peek();
+        this.error("E_UNEXPECTED_TOKEN", t.span, `se esperaba '.' o '}': ${t.type}`);
+      }
+      if (this.i === before) this.advance();
     }
     if (this.peek().type === "dynArrayClose") {
       const end = this.advance().span.end;
