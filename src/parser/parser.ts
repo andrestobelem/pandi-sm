@@ -5,6 +5,7 @@
 // `( expr )` con E_UNCLOSED_PAREN. Rechazo determinista: errores a `errors[]`.
 
 import type {
+  AssignmentNode,
   Expression,
   LiteralKind,
   LiteralNode,
@@ -57,21 +58,95 @@ class Parser {
   }
 
   // ── Programa / secuencia ────────────────────────────────────────────────
-  // SLICE P1: el programa es una Sequence con (a lo sumo) un statement. La
-  // secuencia completa (temporaries, `.`, `^`) llega en slices posteriores.
+  // program ::= sequence (hasta eof). La Sequence es el ÚNICO hogar de las
+  // temporaries (R13/DEV-012). La fuente vacía da una Sequence vacía.
   parseProgram(): ProgramNode {
     const start = this.peek().span.start;
-    const statements: Statement[] = [];
-    if (!this.atEnd) statements.push(this.parseExpression());
+    const body = this.parseSequence("eof");
     const end = this.peek().span.end;
     const span = mkSpan(start, end);
-    const body: SequenceNode = { type: "Sequence", temporaries: [], statements, span };
     return { type: "Program", body, span };
   }
 
-  // expression ::= keyword-message (assignment/cascade en slices posteriores).
+  // sequence ::= temporaries? (statement (`.` statement)* `.`?)
+  // Termina en `close` (eof o rbracket para bloques). R13: tras un Return sólo
+  // se admite la `.` final y el cierre; un statement posterior es inesperado.
+  private parseSequence(close: "eof" | "rbracket"): SequenceNode {
+    const start = this.peek().span.start;
+    const temporaries = this.parseTemporaries();
+    const statements: Statement[] = [];
+    while (!this.atClose(close)) {
+      const stmt = this.parseStatement();
+      statements.push(stmt);
+      // Target no asignable (CORR-2/DEV-010, R8): si tras parsear el statement
+      // queda un `:=` sin consumir, el target no era un identifier simple
+      // (`3 := 4`, `a foo := 1`) => `:=` inesperado. Determinista por code+span.
+      if (this.peek().type === "assignmentOperator") {
+        this.error("E_UNEXPECTED_TOKEN", this.peek().span, "target no asignable: :=");
+        break;
+      }
+      // Separador de statements: `.`. Sin `.` el statement debe ser el último.
+      if (this.peek().type === "period") {
+        this.advance();
+      } else {
+        break;
+      }
+      // R13: `^expr` es TERMINAL — tras su `.` opcional sólo cabe el cierre.
+      if (stmt.type === "Return" && !this.atClose(close)) {
+        const t = this.peek();
+        this.error("E_UNEXPECTED_TOKEN", t.span, `statement tras ^ terminal (R13): ${t.type}`);
+        break;
+      }
+    }
+    const end = this.peek().span.start;
+    return { type: "Sequence", temporaries, statements, span: mkSpan(start, end) };
+  }
+
+  private atClose(close: "eof" | "rbracket"): boolean {
+    return close === "eof" ? this.atEnd : this.peek().type === "rbracket" || this.atEnd;
+  }
+
+  // temporaries ::= `|` identifier* `|`. Viven como VariableNode[] en Sequence
+  // (R13/DEV-012). Sólo se consumen si la secuencia abre con `|`.
+  private parseTemporaries(): VariableNode[] {
+    if (this.peek().type !== "verticalBar") return [];
+    this.advance(); // `|` de apertura
+    const temps: VariableNode[] = [];
+    while (this.peek().type === "identifier") {
+      temps.push(this.variable(this.advance()));
+    }
+    if (this.peek().type === "verticalBar") this.advance(); // `|` de cierre
+    return temps;
+  }
+
+  // statement ::= `^` expression  |  expression. `^expr` => ReturnNode.
+  private parseStatement(): Statement {
+    if (this.peek().type === "returnOperator") {
+      const caret = this.advance();
+      const value = this.parseExpression();
+      return { type: "Return", value, span: mkSpan(caret.span.start, value.span.end) };
+    }
+    return this.parseExpression();
+  }
+
+  // expression ::= assignment | keyword-message. Assignment SÓLO cuando hay un
+  // identifier seguido de `:=` (right-assoc). Cascade llega en otra slice.
   private parseExpression(): Expression {
+    if (this.peek().type === "identifier" && this.peek(1).type === "assignmentOperator") {
+      return this.parseAssignment();
+    }
     return this.parseKeywordMessage();
+  }
+
+  // assignment ::= variable `:=` expression (right-assoc => `a := b := c` anida).
+  // El target sólo puede ser un identifier (R8/CORR-2); un target no-variable
+  // (p.ej. `3 := 4`, `a foo := 1`) se detecta en parseKeywordMessage: al volver,
+  // el `:=` sobrante queda sin consumir y es E_UNEXPECTED_TOKEN.
+  private parseAssignment(): AssignmentNode {
+    const target = this.variable(this.advance()); // identifier
+    this.advance(); // `:=`
+    const value = this.parseExpression();
+    return { type: "Assignment", target, value, span: mkSpan(target.span.start, value.span.end) };
   }
 
   // keyword-message ::= binary-message (keyword binary-message)*  — liga más flojo.
