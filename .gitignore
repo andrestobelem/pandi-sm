@@ -25,6 +25,10 @@ coverage
 # pandi-sm CI artefacts (JUnit XML + coverage)
 reports/
 
+# Local Claude Code settings (machine-local plugin toggles; not project source)
+.claude/settings.json
+.claude/settings.local.json
+
 # nyc test coverage
 .nyc_output
 
