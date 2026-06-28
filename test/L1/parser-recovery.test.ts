@@ -79,3 +79,25 @@ describe("L1 · Parser · recuperación — regresiones (lo bien-formado sigue v
     expect(codes(parse("[1").errors)).toContain("E_UNCLOSED_BLOCK");
   });
 });
+
+describe("L1 · Parser · recuperación — parse() es total (R10: nunca lanza)", () => {
+  it("anidación patológica NO lanza; da E_NESTING_LIMIT y ast null (DEV-019)", () => {
+    // 50k de profundidad desborda el stack de V8 con certeza; parse() debe mapear
+    // el RangeError a un error estructurado en vez de propagar la excepción.
+    const r = parse("{".repeat(50_000)); // si lanzara, el test falla aquí
+    expect(codes(r.errors)).toContain("E_NESTING_LIMIT");
+    expect(r.ast).toBeNull();
+  });
+});
+
+describe("L1 · Parser · recuperación — sin doble-reporte de cierre extraviado", () => {
+  it("cierre extraviado mid-secuencia se reporta UNA sola vez (mismo span)", () => {
+    expect(codes(parse("1 ) 2").errors)).toEqual(["E_UNEXPECTED_TOKEN"]);
+    expect(codes(parse("1 } 2").errors)).toEqual(["E_UNEXPECTED_TOKEN"]);
+    expect(codes(parse("{1 ) 2}").errors)).toEqual(["E_UNEXPECTED_TOKEN"]);
+  });
+
+  it("separador omitido REAL entre statements sí se reporta (1 vez): '1 2'", () => {
+    expect(codes(parse("1 2").errors)).toEqual(["E_UNEXPECTED_TOKEN"]);
+  });
+});

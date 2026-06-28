@@ -131,9 +131,11 @@ class Parser {
       // Ni `.` ni cierre: SEPARADOR OMITIDO con tokens por delante. NO es "sin
       // cerrar": reportamos token inesperado (R10, rechazo determinista) y nos
       // recuperamos continuando, para no perder el cierre ni los statements
-      // siguientes. Si el statement no avanzó el cursor (malformado), forzamos
-      // avance para garantizar progreso del bucle.
-      if (stmt !== null) {
+      // siguientes. Sólo emitimos aquí si el sobrante ABRE un primary (separador
+      // omitido real entre dos statements); si es un token extraviado (cierre
+      // ajeno), lo rechaza parsePrimary una sola vez en la próxima vuelta —evita
+      // el doble-reporte sobre el mismo span. Guarda de progreso para no colgar.
+      if (stmt !== null && this.startsPrimary()) {
         const t = this.peek();
         this.error("E_UNEXPECTED_TOKEN", t.span, `se esperaba '.' o cierre: ${t.type}`);
       }
@@ -610,8 +612,10 @@ class Parser {
       if (this.peek().type === "dynArrayClose" || this.atEnd) break;
       // Ni `.` ni `}`: separador omitido con el cierre aún por delante. NO es "sin
       // cerrar": reportamos token inesperado (R10) y recuperamos, sin perder `}`
-      // ni los elementos siguientes. Progreso garantizado si el elemento no avanzó.
-      if (el !== null) {
+      // ni los elementos siguientes. Sólo emitimos si el sobrante abre un primary
+      // (separador omitido real); un token extraviado lo rechaza parsePrimary una
+      // sola vez (evita doble-reporte). Progreso garantizado si no avanzó.
+      if (el !== null && this.startsPrimary()) {
         const t = this.peek();
         this.error("E_UNEXPECTED_TOKEN", t.span, `se esperaba '.' o '}': ${t.type}`);
       }
@@ -697,6 +701,24 @@ export function parse(source: string): {
 } {
   const lexed = tokenize(source);
   const parser = new Parser(lexed.tokens, source);
-  const ast = parser.parseProgram();
-  return { ast, errors: [...lexed.errors, ...parser.errors] };
+  try {
+    const ast = parser.parseProgram();
+    return { ast, errors: [...lexed.errors, ...parser.errors] };
+  } catch (e) {
+    // R10: parse() NUNCA lanza. Una anidación patológica desborda el stack de V8
+    // (descenso recursivo sin TCO); mapeamos el RangeError a un error estructurado
+    // determinista (E_NESTING_LIMIT) en vez de propagar la excepción (DEV-019).
+    // Cualquier otra excepción es un bug real y se re-lanza (no la enmascaramos).
+    if (e instanceof RangeError) {
+      const zero: Position = { offset: 0, line: 1, column: 1 };
+      const at = lexed.tokens[0]?.span.start ?? zero;
+      const nesting: ParseError = {
+        code: "E_NESTING_LIMIT",
+        span: { start: at, end: at },
+        message: "anidación demasiado profunda (límite de stack)",
+      };
+      return { ast: null, errors: [...lexed.errors, ...parser.errors, nesting] };
+    }
+    throw e;
+  }
 }

@@ -12,7 +12,11 @@ export type ParseErrorCode =
   | "E_UNCLOSED_DYNARRAY"
   | "E_KEYWORD_NO_ARG"
   | "E_CASCADE_NO_RECEIVER"
-  | "E_BYTE_RANGE";
+  | "E_BYTE_RANGE"
+  // Anidación patológica que desborda el stack de V8 (descenso recursivo sin TCO):
+  // parse() lo mapea a este error determinista en vez de propagar el RangeError
+  // (R10: parse() NUNCA lanza). Ver DEV-019.
+  | "E_NESTING_LIMIT";
 
 export interface ParseError {
   code: ParseErrorCode;
