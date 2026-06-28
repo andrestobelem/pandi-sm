@@ -84,6 +84,30 @@ describe("L1 · lexer slice 2 — radix (R4)", () => {
     expect(codes("2r2")).toEqual(["E_RADIX_DIGIT"]);
     expect(codes("16r")).toEqual(["E_RADIX_NO_DIGITS"]);
   });
+
+  it("maximal-munch: un alnum ≥ base TERMINA el radix (no es error) si ya hay ≥1 dígito", () => {
+    // `10r5e3`: `e`(=14) ≥ 10 cierra el radix `10r5` (=5); luego `e3` es identifier.
+    expect(types("10r5e3")).toEqual(["number", "identifier", "eof"]);
+    expect(lexemes("10r5e3")).toEqual(["10r5", "e3", ""]);
+    expect(first("10r5e3").value).toBe(5);
+    expect(first("10r5e3").numKind).toBe("integer");
+    expect(codes("10r5e3")).toEqual([]);
+
+    // `16rFs2`: `s`(=28) ≥ 16 cierra el radix `16rF` (=15); luego `s2`.
+    expect(first("16rFs2").lexeme).toBe("16rF");
+    expect(first("16rFs2").value).toBe(15);
+    expect(first("16rFs2").numKind).toBe("integer");
+    expect(codes("16rFs2")).toEqual([]);
+
+    // `16rFe2`: `e`(=14) < 16 SÍ es dígito hex válido => 16rFe2 = 4066 (un solo número).
+    expect(first("16rFe2").value).toBe(4066);
+    expect(first("16rFe2").numKind).toBe("integer");
+    expect(lexemes("16rFe2")).toEqual(["16rFe2", ""]);
+    expect(codes("16rFe2")).toEqual([]);
+
+    // `16rG`: `G`(=16) ≥ 16 SIN dígito previo => sigue siendo error (count===0).
+    expect(codes("16rG")).toEqual(["E_RADIX_DIGIT"]);
+  });
 });
 
 describe("L1 · lexer slice 2 — float (R4/R7)", () => {

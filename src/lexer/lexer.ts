@@ -357,7 +357,11 @@ class Lexer {
     for (;;) {
       const v = radixDigitValue(this.peek());
       if (v === -1) break;
+      // alnum con valor ≥ base: por maximal-munch TERMINA el radix si ya hay ≥1
+      // dígito válido (`10r5e3`⇒`10r5`+`e3`, `16rFs2`⇒`16rF`+`s2`). Sólo es error
+      // si no precede dígito alguno (`16rG`, `2r2`) ⇒ E_RADIX_DIGIT (count===0).
       if (base >= 2n && BigInt(v) >= base) {
+        if (count > 0) break;
         this.advance();
         return this.error("E_RADIX_DIGIT", start, "dígito ≥ base en literal radix");
       }
