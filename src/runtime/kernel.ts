@@ -47,6 +47,12 @@ export function bootstrapKernel(): Universe {
   const UndefinedObject = makeClass("UndefinedObject", Object_, 0);
   const SmallInteger = makeClass("SmallInteger", Object_, 0);
   const String_ = makeClass("String", Object_, 0);
+  // Boolean < Object; True/False < Boolean. true/false son booleans nativos JS
+  // (classOf los mapea a True/False); estas clases existen para que ifTrue:/and:/not
+  // despachen a methodDicts reales (DEV-003: condicionales son sends, no inlining).
+  const Boolean_ = makeClass("Boolean", Object_, 0);
+  const True_ = makeClass("True", Boolean_, 0);
+  const False_ = makeClass("False", Boolean_, 0);
   const BlockClosure = makeClass("BlockClosure", Object_, 0);
   const Transcript_class = makeClass("Transcript class", Object_, 0);
 
@@ -73,6 +79,9 @@ export function bootstrapKernel(): Universe {
     UndefinedObject,
     SmallInteger,
     String_,
+    Boolean_,
+    True_,
+    False_,
     BlockClosure,
     Transcript_class,
   ]) {
@@ -96,6 +105,9 @@ export function bootstrapKernel(): Universe {
     UndefinedObject,
     SmallInteger,
     String: String_,
+    Boolean: Boolean_,
+    True: True_,
+    False: False_,
     BlockClosure,
     Transcript_class,
     nil,

@@ -83,6 +83,9 @@ export interface Universe {
   UndefinedObject: STClass;
   SmallInteger: STClass;
   String: STClass;
+  Boolean: STClass;
+  True: STClass;
+  False: STClass;
   BlockClosure: STClass;
   Transcript_class: STClass;
   nil: STObject; // instancia única de UndefinedObject
@@ -98,7 +101,10 @@ export interface Universe {
 export function classOf(v: STValue, u: Universe): STClass {
   if (typeof v === "number" || typeof v === "bigint") return u.SmallInteger;
   if (typeof v === "string") return u.String;
+  // boolean nativo: true -> True, false -> False (ANTES de la rama de objeto).
+  // Es la vía SECUNDARIA (una vez el boolean fluye como receptor de un send); la
+  // vía PRIMARIA es el binding global true/false en eval.ts.
+  if (typeof v === "boolean") return v ? u.True : u.False;
   if (typeof v === "object") return v.class;
-  // boolean no se cablea en el skeleton (True/False es L3-proper); cae a Object.
   return u.Object;
 }

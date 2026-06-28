@@ -63,6 +63,12 @@ function lookupGlobal(name: string, u: Universe): STValue | undefined {
       return u.SmallInteger;
     case "String":
       return u.String;
+    case "Boolean":
+      return u.Boolean;
+    case "True":
+      return u.True;
+    case "False":
+      return u.False;
     case "BlockClosure":
       return u.BlockClosure;
     default:
