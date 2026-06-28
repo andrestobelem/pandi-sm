@@ -5,7 +5,9 @@
 
 ## What this is
 
-_(TBD — describe the purpose and scope of pandi-sm here.)_
+`pandi-sm` is a Smalltalk implementation written in Node.js — a Smalltalk
+language runtime (parser, object model, and evaluator) running on the Node
+platform.
 
 ## Engineering mindset
 
