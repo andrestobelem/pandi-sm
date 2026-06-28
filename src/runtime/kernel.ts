@@ -1,10 +1,17 @@
-// L2 · bootstrapKernel — cablea el núcleo MÍNIMO por mutación (estilo JsSOM),
-// sólo lo necesario para que send() (L3) haga lookup por la superclass chain.
-// Plan §5.2: núcleo Object -> Behavior -> ClassDescription -> Class + Metaclass
-// (mínima), UndefinedObject + nil (instancia única), SmallInteger (instancias =
+// L2 · bootstrapKernel — cablea el núcleo por mutación (estilo JsSOM/Squeak
+// setClass), sólo lo necesario para que send() (L3) haga lookup por la superclass
+// chain. Plan §5.2: núcleo Object -> Behavior -> ClassDescription -> Class +
+// Metaclass, UndefinedObject + nil (instancia única), SmallInteger (instancias =
 // number nativo), String, Transcript. Los methodDict nacen vacíos (Map); L3
-// instala las primitivas. El cierre metacircular completo y los 23 selectores
-// son L2-proper (diferidos): aquí NO se verifica `X class class === Metaclass`.
+// instala las primitivas.
+//
+// Golden braid REAL (L2-proper): cada clase X tiene su PROPIA metaclase "X class"
+// (no compartimos un único Metaclass). Así `classOf(classOf(X)) === Metaclass`
+// vale POR CONSTRUCCIÓN, hay paralelismo `classOf(X).superclass ===
+// classOf(X.superclass)`, y la trampa `classOf(Object).superclass === Class`.
+// La metaclase de X hereda de classOf(X.superclass), salvo "Object class" cuya
+// superclase es Class (raíz del braid) y "Metaclass class" cuya clase es el
+// propio Metaclass (único self-loop).
 
 import { ObjectFormat, type STClass, type STObject, type Universe } from "./object.js";
 import { SymbolTable } from "./symbol-table.js";
@@ -66,11 +73,12 @@ export function bootstrapKernel(): Universe {
   // La superclase de la raíz es el STObject nil (plan §5.2); termina la cadena.
   Object_.superclass = nil;
 
-  // ── Metaclass golden-braid MÍNIMO ────────────────────────────────────────
-  // Cableamos el slot `class` de cada clase a Metaclass (suficiente para que
-  // classOf(unaClase) sea consistente). El cierre completo (X class class ===
-  // Metaclass) es L2-proper y NO se aserta en el skeleton.
-  for (const c of [
+  // ── Golden braid REAL: una metaclase propia por clase ────────────────────
+  // Cada clase X recibe su metaclase M_X (nombre "X class"). En dos pasadas:
+  // (1) creamos M_X y cableamos X.class = M_X para que classOf(X) ya resuelva;
+  // (2) cableamos M_X.superclass = classOf(X.superclass) usando classOf, que
+  //     ahora devuelve la metaclase correcta. Casos raíz/self-loop aparte.
+  const coreClasses: STClass[] = [
     Object_,
     Behavior,
     ClassDescription,
@@ -84,8 +92,38 @@ export function bootstrapKernel(): Universe {
     False_,
     BlockClosure,
     Transcript_class,
-  ]) {
-    c.class = Metaclass;
+  ];
+
+  // Pasada 1: M_X con superclass provisional null; X.class = M_X. La metaclase es
+  // instancia de Metaclass (M_X.class = Metaclass) — ahí cierra el doble classOf.
+  for (const X of coreClasses) {
+    const meta: STClass = {
+      name: `${X.name} class`,
+      superclass: null,
+      methodDict: new Map(),
+      instSize: 0,
+      class: Metaclass,
+      hash: nextHash++,
+      format: ObjectFormat.Pointers,
+      pointers: [],
+    };
+    X.class = meta;
+  }
+
+  // Pasada 2: M_X.superclass = classOf(X.superclass) (paralelismo). Excepciones:
+  //  · Object class: su superclase es Class (raíz del braid; Object.superclass es
+  //    nil, no una clase, así que no hay metaclase de la que heredar).
+  //  · Metaclass class: instancia de Metaclass (ya cableado en pasada 1); su
+  //    superclase sigue la regla general (classOf(ClassDescription)).
+  for (const X of coreClasses) {
+    const meta = X.class;
+    const sup = X.superclass;
+    if (sup === null || sup === nil) {
+      // Object es la única clase con superclass nil: "Object class" hereda de Class.
+      meta.superclass = Class;
+    } else {
+      meta.superclass = (sup as STClass).class;
+    }
   }
 
   // ── Transcript: instancia única de Transcript_class ──────────────────────
