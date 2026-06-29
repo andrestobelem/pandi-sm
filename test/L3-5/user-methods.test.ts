@@ -152,6 +152,30 @@ describe("L3.5 · GATE-KERNELLOAD SUPER (positivo)", () => {
   });
 });
 
+// Follow-up audit · M5: Class>>superclass: no re-derivaba la superclase de la
+// metaclase (golden braid), así que el lookup class-side recorría una cadena
+// obsoleta y un método heredado a nivel de clase caía a dNU silenciosamente.
+describe("L3.5 · GATE-audit · superclass: re-deriva la metaclase (golden braid)", () => {
+  it("tras `B superclass: A`, B class hereda de A class (puntero estructural)", () => {
+    const u = freshUniverse();
+    const A = subclassOf(u, u.Object, "Amb");
+    const B = subclassOf(u, u.Object, "Bmb");
+    send(B, "superclass:", [A], u);
+    expect(B.superclass).toBe(A);
+    expect((B.class as STClass).superclass).toBe(A.class);
+  });
+
+  it("un método class-side definido en A es alcanzable desde B tras `B superclass: A`", () => {
+    const u = freshUniverse();
+    const A = subclassOf(u, u.Object, "Acs");
+    const B = subclassOf(u, u.Object, "Bcs");
+    // método class-side: vive en la metaclase A class.
+    defineMethod(A.class as STClass, "greet [ ^ 7 ]", u);
+    send(B, "superclass:", [A], u);
+    expect(send(B, "greet", [], u)).toBe(7);
+  });
+});
+
 describe("L3.5 · `^` retorna desde el home del método", () => {
   it("`^` dentro de un ifTrue:-block retorna del MÉTODO, no del bloque", () => {
     const u = freshUniverse();

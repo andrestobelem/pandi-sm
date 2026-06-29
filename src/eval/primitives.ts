@@ -1363,10 +1363,23 @@ function classInstanceVariableNames(receiver: STValue, args: STValue[]): STValue
   return cls;
 }
 
-/** Class>>superclass: — recablea la superclase (la metaclase no se re-deriva aquí). */
-function classSetSuperclass(receiver: STValue, args: STValue[]): STValue {
+/**
+ * Class>>superclass: — recablea la superclase Y re-deriva la superclase de la
+ * metaclase en paralelo (golden braid: `B class` hereda de `A class` cuando `B`
+ * hereda de `A`). makeClassWithMetaclass establece meta.superclass = sup.class al
+ * crear; sin replicarlo aquí, el lookup class-side recorre una cadena obsoleta y un
+ * método heredado a nivel de clase cae a doesNotUnderstand: silenciosamente.
+ */
+function classSetSuperclass(receiver: STValue, args: STValue[], u: Universe): STValue {
   const cls = receiver as STClass;
-  cls.superclass = args[0] as STClass;
+  const newSup = args[0] as STClass;
+  cls.superclass = newSup;
+  // Misma regla que makeClassWithMetaclass: la metaclase hereda de classOf(superclass);
+  // si la nueva superclase es la raíz (nil), hereda de Class (la trampa).
+  cls.class.superclass =
+    newSup !== null && (newSup as STValue) !== u.nil && "methodDict" in newSup
+      ? newSup.class
+      : u.Class;
   return cls;
 }
 
