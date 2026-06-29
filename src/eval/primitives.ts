@@ -179,10 +179,15 @@ function signalError(text: string, u: Universe): never {
 // `elements`. at:/at:put: son 1-based (Smalltalk indexa desde 1, origin=dialecto vs el
 // 0-based de JS, §5.4); un índice fuera de 1..size SEÑALA un Error capturable (L5).
 
-/** Convierte un índice Smalltalk (number|bigint) a entero JS, o señala si no es entero. */
+/**
+ * Convierte un índice Smalltalk (number|bigint) a entero JS, o señala si no es entero.
+ * Para bigint, aplica el mismo guard de rango seguro que intervalEndpoint (#4 audit):
+ * Number() de un bigint > 2^53-1 pierde precisión y podría indexar el slot equivocado
+ * silenciosamente.
+ */
 function arrayIndex(arg: STValue, u: Universe): number {
   if (typeof arg === "number") return arg;
-  if (typeof arg === "bigint") return Number(arg);
+  if (typeof arg === "bigint") return safeIntFromBigInt(arg, "Array>>at:: índice", u);
   signalError(`Array>>at:: índice no entero`, u);
 }
 
@@ -306,6 +311,23 @@ function intervalDo(receiver: STValue, args: STValue[], u: Universe): STValue {
 }
 
 /**
+ * safeIntFromBigInt — convierte un bigint a number JS SOLO si está dentro del rango
+ * seguro de enteros IEEE 754 (|v| <= 9007199254740991 = 2^53-1). Fuera de ese rango,
+ * Number() pierde precisión silenciosamente (p.ej. 9007199254740993n -> 9007199254740992),
+ * produciendo índices erróneos o bucles de ~10^15 iteraciones. Señala un Error capturable
+ * vía signalError. `label` identifica el operando en el mensaje de error.
+ *
+ * Fuente única de verdad reutilizada por arrayIndex (#4 audit), timesRepeat: (#5),
+ * e intervalEndpoint (guardas pre-existentes de intervalos).
+ */
+function safeIntFromBigInt(v: bigint, label: string, u: Universe): number {
+  if (v < -9007199254740991n || v > 9007199254740991n) {
+    signalError(`${label} fuera del rango seguro de entero JS (${v.toString()})`, u);
+  }
+  return Number(v);
+}
+
+/**
  * Coerce un extremo/paso de Interval (receptor `to:`/arg) a un entero JS seguro, o SEÑALA
  * RUIDOSAMENTE. El STInterval guarda `from`/`to`/`by` como `number` (double): convertirlos
  * a ciegas con Number() esconde DOS trampas silenciosas (DRIFT-L4):
@@ -328,13 +350,7 @@ export function intervalEndpoint(v: STValue, label: string, u: Universe): number
     signalError(`Interval con ${label} no entero (${hostPrintString(v)}) no soportado (MVP)`, u);
   }
   if (typeof v === "bigint") {
-    if (v < -9007199254740991n || v > 9007199254740991n) {
-      signalError(
-        `Interval con ${label} fuera del rango seguro (${v.toString()}) no soportado (MVP)`,
-        u,
-      );
-    }
-    return Number(v);
+    return safeIntFromBigInt(v, `Interval con ${label}`, u);
   }
   if (typeof v === "number") return v;
   // Cualquier otro STValue (Character, String, nil, …) no es un extremo numérico válido.
@@ -689,12 +705,22 @@ function stringConcat(receiver: STValue, args: STValue[], u: Universe): STValue 
   return makeString(head + tail, u);
 }
 
-/** String>>size — cantidad de chars (operación a nivel de chars; Symbol < String la hereda). */
+/**
+ * String>>size — cantidad de CODEPOINTS (no unidades UTF-16). Symbol < String hereda.
+ *
+ * (#7 audit) text.length cuenta unidades UTF-16: un carácter astral (p.ej. U+1F600 😀)
+ * tiene length=2 pero es 1 codepoint. streamBufferOf construye un STCharacter POR
+ * CODEPOINT via for...of, por lo que devolver text.length producía una asimetría:
+ * `'😀' size` → 2 pero `'😀' readStream size` → 1. Ahora usamos [...text].length
+ * (iteración Unicode sobre codepoints), de modo que size y stream coinciden.
+ */
 function stringSize(receiver: STValue, _args: STValue[], u: Universe): STValue {
   // String boxed (.chars) o Symbol (.text, < String hereda size): textOf unifica ambos.
   const text = textOf(receiver);
   if (text === null) return signalError("String>>size requiere un receptor String", u);
-  return text.length;
+  // [...text] itera codepoints (mismo modelo que streamBufferOf); evita asimetría con
+  // strings que contienen caracteres astrales (pares sustitutos UTF-16).
+  return [...text].length;
 }
 
 /**
@@ -777,9 +803,15 @@ function blockValue(receiver: STValue, args: STValue[], u: Universe): STValue {
  * es special-form: Squeak NO inlinea timesRepeat:; aquí es un envío ordinario que
  * itera. Un `^` dentro del bloque atraviesa el bucle por throw (NonLocalReturn).
  * Devuelve el receptor (convención del bucle). El bloque debe ser de aridad 0.
+ *
+ * (#5 audit) Un receptor bigint > 2^53-1 causaba un bucle de ~10^15 iteraciones por
+ * Number() sin guard. Ahora aplicamos safeIntFromBigInt (misma lógica que intervalEndpoint)
+ * para señalar un Error capturable antes de iterar.
  */
 function timesRepeat(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const n = Number(receiver as number | bigint);
+  const raw = receiver as number | bigint;
+  const n =
+    typeof raw === "bigint" ? safeIntFromBigInt(raw, "timesRepeat: contador", u) : Number(raw);
   const block = args[0] as STClosure;
   for (let i = 0; i < n; i++) {
     evalBlock(block, [], u);
