@@ -83,7 +83,7 @@ describe("followup · temporaries sin `|` de cierre emite E_UNCLOSED_TEMPS", () 
 // no siempre a la línea 1 columna 1.
 describe("followup · span de E_NESTING_LIMIT apunta al sitio de anidación", () => {
   it("anidación profunda reporta un offset > 0 (no tokens[0])", () => {
-    const deep = "(".repeat(2000) + "1" + ")".repeat(2000);
+    const deep = `${"(".repeat(2000)}1${")".repeat(2000)}`;
     const err = parse(deep).errors.find((e) => (e as ParseError).code === "E_NESTING_LIMIT") as
       | ParseError
       | undefined;
