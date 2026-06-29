@@ -10,7 +10,19 @@
  * @layer   L2
  */
 import { describe, expect, it } from "vitest";
-import { bootstrapKernel, classOf } from "../../src/runtime/index.js";
+import { bootstrapKernel, classOf, type STClass, type STObject } from "../../src/runtime/index.js";
+
+/** ¿La cadena de superclases de `cls` pasa por `target` antes de terminar? */
+function chainTerminatesAt(cls: STClass, target: STClass): boolean {
+  let cur: STClass | null = cls;
+  let guard = 0;
+  while (cur !== null && guard++ < 100) {
+    if (cur === target) return true;
+    const sup: STClass | STObject | null = cur.superclass;
+    cur = sup !== null && "methodDict" in sup ? (sup as STClass) : null;
+  }
+  return false;
+}
 
 describe("L2 · kernel · classOf sobre inmediatos y objetos", () => {
   it("classOf(3) === Universe.SmallInteger (number nativo)", () => {
@@ -65,7 +77,11 @@ describe("L2 · kernel · cadena de clases núcleo (lookup-ready)", () => {
   it("Metaclass existe (mínimo) y SmallInteger/String/Transcript_class encadenan a Object", () => {
     const u = bootstrapKernel();
     expect(u.Metaclass).toBeDefined();
-    expect(u.SmallInteger.superclass).toBe(u.Object);
+    // L4 F2: SmallInteger ya NO cuelga directo de Object; entra en la torre numérica
+    // SmallInteger <- Integer <- Number <- Magnitude <- Object. Verificamos que la
+    // cadena TERMINA en Object (intento original del test), no la super directa.
+    expect(u.SmallInteger.superclass).toBe(u.namespace.get("Integer"));
+    expect(chainTerminatesAt(u.SmallInteger, u.Object)).toBe(true);
     expect(u.String.superclass).toBe(u.Object);
     expect(u.Transcript_class.superclass).toBe(u.Object);
   });

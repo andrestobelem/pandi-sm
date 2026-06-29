@@ -158,6 +158,38 @@ export interface STClosure extends STObject {
   definingClass?: STClass;
 }
 
+/**
+ * STFloat — Float BOXED (L4 F2): un STObject (class = u.Float) que porta el double
+ * JS en un campo dedicado `floatValue` (NO en un slot de `pointers`, para esquivar
+ * el drift instSize-no-acumulativo: una subclase con instSize 0 no tendría el slot).
+ * El SmallInteger sigue NATIVO (number|bigint); SÓLO el Float se boxea, así classOf
+ * lo despacha por `.class` sin tocar el hot-path entero. printString lo distingue de
+ * un entero (3.0 imprime "3.0", no "3"). Float = por VALOR, == por referencia (ANSI).
+ */
+export interface STFloat extends STObject {
+  floatValue: number;
+}
+
+/**
+ * STCharacter — Character BOXED (L4 F2): un STObject (class = u.Character) que porta
+ * el code point en un campo dedicado `codePoint`. El lexer emite el valor del literal
+ * como STRING de 1 char (String.fromCodePoint); el evaluador deriva el code point con
+ * value.codePointAt(0). == y = por VALOR (code point): $a == $a es true (GATE-L4-IDENTITY).
+ */
+export interface STCharacter extends STObject {
+  codePoint: number;
+}
+
+/** ¿`v` es un Float boxed? (tiene el campo dedicado `floatValue`). */
+export function isFloat(v: STValue): v is STFloat {
+  return typeof v === "object" && "class" in v && typeof (v as STFloat).floatValue === "number";
+}
+
+/** ¿`v` es un Character boxed? (tiene el campo dedicado `codePoint`). */
+export function isCharacter(v: STValue): v is STCharacter {
+  return typeof v === "object" && "class" in v && typeof (v as STCharacter).codePoint === "number";
+}
+
 /** Una clase es un STObject extendido con estado de Behavior (method dict + cadena de superclases). */
 export interface STClass extends STObject {
   name: string;
@@ -185,6 +217,11 @@ export interface Universe {
   Metaclass: STClass;
   UndefinedObject: STClass;
   SmallInteger: STClass;
+  // L4 F2: clases de la torre numérica boxeada. Float/Character son STObjects con un
+  // campo dedicado (floatValue/codePoint); se materializan vía .st (loadKernelSources)
+  // y se cablean aquí para que classOf y los constructores las referencien sin lookup.
+  Float: STClass;
+  Character: STClass;
   String: STClass;
   Boolean: STClass;
   True: STClass;
@@ -251,6 +288,38 @@ export function basicNew(cls: STClass, u: Universe): STObject {
   };
 }
 
+/**
+ * makeFloat(value, u) — caja un double JS como STFloat (class = u.Float). El valor
+ * vive en el campo dedicado `floatValue`; `pointers` queda vacío (no usa ivars). El
+ * hash nace estable/único (identidad por referencia para ==, la igualdad por valor
+ * la da Float>>=). NO clamp/redondeo: el double se conserva tal cual lo dio el lexer.
+ */
+export function makeFloat(value: number, u: Universe): STFloat {
+  return {
+    class: u.Float,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    floatValue: value,
+  };
+}
+
+/**
+ * makeCharacter(codePoint, u) — caja un code point como STCharacter (class = u.Character).
+ * El code point vive en el campo dedicado `codePoint`. El hash NO se usa para `==`: la
+ * identidad de Character es por VALOR (code point), igual que un inmediato (identical()
+ * y identityHash() lo tratan por code point). $a == $a es true sin tabla de interning.
+ */
+export function makeCharacter(codePoint: number, u: Universe): STCharacter {
+  return {
+    class: u.Character,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    codePoint,
+  };
+}
+
 /** Mensaje de error determinista para un índice de ivar fuera de rango (base-1). */
 function rangeError(i: number, instSize: number): Error {
   return new Error(`instVarAt: index ${i} fuera de rango 1..${instSize}`);
@@ -297,6 +366,9 @@ export function identityHash(v: STValue, _u: Universe): number {
     for (let i = 0; i < t.length; i++) h = (Math.imul(31, h) + t.charCodeAt(i)) | 0;
     return h;
   }
+  // L4 F2 · Character: hash POR VALOR (code point), consistente con `==` por valor
+  // ($a == $a true => mismo hash). ANTES de la rama de hash-por-objeto.
+  if (isCharacter(v)) return v.codePoint;
   return v.hash;
 }
 
@@ -314,6 +386,11 @@ export function identical(a: STValue, b: STValue): boolean {
   ) {
     return BigInt(a) === BigInt(b);
   }
+  // L4 F2 · Character: identidad por VALOR (code point), no por referencia. Sin tabla
+  // de interning: dos cajas $a distintas son `==` si comparten code point (GATE-L4-IDENTITY).
+  if (isCharacter(a) && isCharacter(b)) return a.codePoint === b.codePoint;
+  // Float: `==` es por REFERENCIA (ANSI; la igualdad por valor la da Float>>=), así que
+  // cae al `a === b` de abajo (dos cajas distintas con igual valor NO son ==).
   return a === b;
 }
 

@@ -89,7 +89,18 @@ export function bootstrapKernel(): Universe {
   const Class = makeClass("Class", ClassDescription, 0);
   const Metaclass = makeClass("Metaclass", ClassDescription, 0);
   const UndefinedObject = makeClass("UndefinedObject", Object_, 0);
-  const SmallInteger = makeClass("SmallInteger", Object_, 0);
+  // ── L4 F2 · torre numérica: Magnitude (comparables) <- Number <- Integer <-
+  // SmallInteger; Float < Number; Character < Magnitude. La cadena se cablea AQUÍ
+  // (no en .st: SmallInteger ya existe en el núcleo y el cargador rechaza
+  // duplicados) para que max:/min:/between:and: definidos en Magnitude sean
+  // alcanzables por toda la familia. Los cuerpos derivados (.st) los instala
+  // kernel-numerics vía defineMethod (GATE-L4-PROVENANCE).
+  const Magnitude = makeClass("Magnitude", Object_, 0);
+  const Number_ = makeClass("Number", Magnitude, 0);
+  const Integer = makeClass("Integer", Number_, 0);
+  const SmallInteger = makeClass("SmallInteger", Integer, 0);
+  const Float = makeClass("Float", Number_, 0);
+  const Character = makeClass("Character", Magnitude, 0);
   const String_ = makeClass("String", Object_, 0);
   // Boolean < Object; True/False < Boolean. true/false son booleans nativos JS
   // (classOf los mapea a True/False); estas clases existen para que ifTrue:/and:/not
@@ -125,7 +136,12 @@ export function bootstrapKernel(): Universe {
     Class,
     Metaclass,
     UndefinedObject,
+    Magnitude,
+    Number_,
+    Integer,
     SmallInteger,
+    Float,
+    Character,
     String_,
     Boolean_,
     True_,
@@ -185,7 +201,12 @@ export function bootstrapKernel(): Universe {
     Class,
     Metaclass,
     UndefinedObject,
+    Magnitude,
+    Number_,
+    Integer,
     SmallInteger,
+    Float,
+    Character,
     String_,
     Boolean_,
     True_,
@@ -204,6 +225,8 @@ export function bootstrapKernel(): Universe {
     Metaclass,
     UndefinedObject,
     SmallInteger,
+    Float,
+    Character,
     String: String_,
     Boolean: Boolean_,
     True: True_,

@@ -24,6 +24,8 @@ import { parse } from "../parser/index.js";
 import {
   bootstrapKernel,
   type HomeMarker,
+  makeCharacter,
+  makeFloat,
   NonLocalReturn,
   ObjectFormat,
   type Scope,
@@ -34,6 +36,7 @@ import {
 import { installExceptionPrimitives } from "./exceptions.js";
 import { KERNEL_EXCEPTION_SOURCES } from "./kernel-exceptions.js";
 import { loadKernelSources } from "./kernel-loader.js";
+import { loadNumericMethods } from "./kernel-numerics.js";
 import { installPrimitives } from "./primitives.js";
 import { send, superSend } from "./send.js";
 
@@ -115,6 +118,20 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
         // mapea a u.Symbol; el subclass: lee su .text como nombre de clase.
         if (typeof node.value === "string") return ctx.u.symbols.intern(node.value);
         throw new Error("literal symbol sin value");
+      }
+      // L4 F2 · Float boxed: el lexer ya hizo parseFloat (number); las variantes
+      // e/d/q colapsan a un único Float en el MVP (FloatE/D/Q diferidas, log L6).
+      if (node.lit === "float") {
+        if (typeof node.value === "number") return makeFloat(node.value, ctx.u);
+        throw new Error("literal float sin value numérico");
+      }
+      // L4 F2 · Character boxed: el lexer emite el valor como STRING de 1 char
+      // (String.fromCodePoint); derivamos el code point con codePointAt(0).
+      if (node.lit === "character") {
+        if (typeof node.value === "string") {
+          return makeCharacter(node.value.codePointAt(0) as number, ctx.u);
+        }
+        throw new Error("literal character sin value string");
       }
       throw new Error(`literal no soportado en el skeleton: ${node.lit}`);
     }
@@ -343,6 +360,10 @@ export function evalWith(source: string): EvalResult {
   // primitivas) y ANTES de la evaluación, así Error/Warning/... son resolubles.
   loadKernelSources(universe, KERNEL_EXCEPTION_SOURCES);
   installExceptionPrimitives(universe);
+  // L4 F2: métodos derivados de Magnitude (.st: max:/min:/between:and:) sobre la
+  // torre numérica del núcleo (Magnitude/Number/Integer/Float/Character ya viven en
+  // bootstrap; aquí sólo se añaden los cuerpos, con tag de procedencia).
+  loadNumericMethods(universe);
   // Scope de programa: self = nil (no hay receptor de método a tope de programa;
   // nil es el receptor convencional del doIt). home = un marcador fresco.
   const home: HomeMarker = {};

@@ -8,12 +8,17 @@ import {
   classOf,
   identical,
   identityHash as identityHashOf,
+  isCharacter,
+  isFloat,
   type Message,
   makeClassWithMetaclass,
+  makeFloat,
   notIdentical,
   type Primitive,
+  type STCharacter,
   type STClass,
   type STClosure,
+  type STFloat,
   type STObject,
   type STSymbol,
   type STValue,
@@ -24,8 +29,29 @@ import { signalMessageNotUnderstood } from "./exceptions.js";
 import { printString as hostPrintString } from "./print.js";
 import { send } from "./send.js";
 
-/** Suma SmallInteger. HOOK: si el resultado nativo no es seguro, promueve a BigInt. */
-function smallIntegerPlus(receiver: STValue, args: STValue[]): STValue {
+// ── L4 F2 · coerción mixta Int<->Float ──────────────────────────────────────
+// REGLA (plan §5.4, origin=ingeniería/dialecto): la presencia de un Float en
+// CUALQUIER operando de + - * / promueve la operación a aritmética Float (el otro
+// operando se coerce con Number()) y el resultado es un Float boxed. bigint+Float es
+// lossy (Number(bigint)) — aceptable en el MVP (se flaggea para el log L6). Las
+// comparaciones mixtas producen un Boolean nativo (no boxean).
+
+/** Lee el double JS de un Float boxed o el valor numérico de un SmallInteger nativo. */
+function asJsNumber(v: STValue): number {
+  if (isFloat(v)) return v.floatValue;
+  return Number(v as number | bigint);
+}
+
+/** ¿Alguno de receptor/arg es un Float boxed? (gatilla la coerción mixta a Float). */
+function anyFloat(a: STValue, b: STValue): boolean {
+  return isFloat(a) || isFloat(b);
+}
+
+/** Suma SmallInteger. Mixto con Float => Float; HOOK BigInt en overflow entero. */
+function smallIntegerPlus(receiver: STValue, args: STValue[], u: Universe): STValue {
+  if (anyFloat(receiver, args[0] as STValue)) {
+    return makeFloat(asJsNumber(receiver) + asJsNumber(args[0] as STValue), u);
+  }
   const a = receiver as number | bigint;
   const b = args[0] as number | bigint;
   if (typeof a === "bigint" || typeof b === "bigint") return BigInt(a) + BigInt(b);
@@ -34,8 +60,11 @@ function smallIntegerPlus(receiver: STValue, args: STValue[]): STValue {
   return r;
 }
 
-/** Resta SmallInteger. Mismo HOOK de promoción a BigInt en overflow que la suma. */
-function smallIntegerMinus(receiver: STValue, args: STValue[]): STValue {
+/** Resta SmallInteger. Mixto con Float => Float; mismo HOOK BigInt que la suma. */
+function smallIntegerMinus(receiver: STValue, args: STValue[], u: Universe): STValue {
+  if (anyFloat(receiver, args[0] as STValue)) {
+    return makeFloat(asJsNumber(receiver) - asJsNumber(args[0] as STValue), u);
+  }
   const a = receiver as number | bigint;
   const b = args[0] as number | bigint;
   if (typeof a === "bigint" || typeof b === "bigint") return BigInt(a) - BigInt(b);
@@ -44,14 +73,142 @@ function smallIntegerMinus(receiver: STValue, args: STValue[]): STValue {
   return r;
 }
 
-/** Multiplica SmallInteger. Mismo HOOK de promoción que en la suma. */
-function smallIntegerTimes(receiver: STValue, args: STValue[]): STValue {
+/** Multiplica SmallInteger. Mixto con Float => Float; mismo HOOK de promoción. */
+function smallIntegerTimes(receiver: STValue, args: STValue[], u: Universe): STValue {
+  if (anyFloat(receiver, args[0] as STValue)) {
+    return makeFloat(asJsNumber(receiver) * asJsNumber(args[0] as STValue), u);
+  }
   const a = receiver as number | bigint;
   const b = args[0] as number | bigint;
   if (typeof a === "bigint" || typeof b === "bigint") return BigInt(a) * BigInt(b);
   const r = a * b;
   if (!Number.isSafeInteger(r)) return BigInt(a) * BigInt(b);
   return r;
+}
+
+/** ¿`v` es un divisor numérico igual a cero? (entero 0/0n o Float 0.0). */
+function isZeroDivisor(v: STValue): boolean {
+  if (typeof v === "number") return v === 0;
+  if (typeof v === "bigint") return v === 0n;
+  if (isFloat(v)) return v.floatValue === 0;
+  return false;
+}
+
+/**
+ * SEÑALA ZeroDivide vía la máquina L5 (plan §8.2): enviamos `signal:` a la clase
+ * ZeroDivide resuelta DESDE el namespace (no hardcode), reusando signalException/
+ * handlerStack sin maquinaria nueva. Capturable por on: ZeroDivide do: y por su
+ * supertipo on: ArithmeticError do:. NO devuelve (signal lanza/desenrolla); el `as
+ * never`/throw cubre el caso sin handler (defaultAction propaga un Error de host).
+ */
+function signalZeroDivide(u: Universe): never {
+  const zeroDivide = u.namespace.get("ZeroDivide");
+  if (zeroDivide === undefined) throw new Error("ZeroDivide: jerarquía L5 no cargada");
+  send(zeroDivide, "signal:", ["ZeroDivide: divisor cero"], u);
+  // signal: con handler desenrolla por Unwind; sin handler defaultAction ya lanzó.
+  throw new Error("ZeroDivide: divisor cero (sin handler)");
+}
+
+/**
+ * SmallInteger>>/ (NUEVO L4 F2). Divisor 0 => SEÑALA ZeroDivide. Si algún operando es
+ * Float => división Float. Entre enteros: EXACTA (resto 0) => Integer (SmallInteger/
+ * bigint); NO-exacta => Float (Fraction DIFERIDA, desviación log L6).
+ */
+function smallIntegerDivide(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const b = args[0] as STValue;
+  if (isZeroDivisor(b)) signalZeroDivide(u);
+  if (anyFloat(receiver, b)) return makeFloat(asJsNumber(receiver) / asJsNumber(b), u);
+  const ai = BigInt(receiver as number | bigint);
+  const bi = BigInt(b as number | bigint);
+  if (ai % bi === 0n) {
+    // Exacta: cociente entero. Volvemos a number si es seguro (hot-path nativo).
+    const q = ai / bi;
+    return q >= BigInt(Number.MIN_SAFE_INTEGER) && q <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(q)
+      : q;
+  }
+  // No-exacta: Float (sin Fraction). Number() de los enteros (lossy si enormes, MVP).
+  return makeFloat(Number(receiver as number | bigint) / Number(b as number | bigint), u);
+}
+
+/** SmallInteger>>abs — valor absoluto (preserva number/bigint). */
+function smallIntegerAbs(receiver: STValue): STValue {
+  const a = receiver as number | bigint;
+  if (typeof a === "bigint") return a < 0n ? -a : a;
+  return Math.abs(a);
+}
+
+/** SmallInteger>>negated — el opuesto aditivo (preserva number/bigint). */
+function smallIntegerNegated(receiver: STValue): STValue {
+  const a = receiver as number | bigint;
+  if (typeof a === "bigint") return -a;
+  return -a;
+}
+
+// ── L4 F2 · Float (boxed) · aritmética y comparación ────────────────────────
+// El receptor es siempre un STFloat; el arg puede ser Float o SmallInteger (se coerce
+// con asJsNumber). Aritmética => Float boxed; comparación => Boolean nativo.
+
+function floatBinary(op: (a: number, b: number) => number): Primitive {
+  return (receiver, args, u) =>
+    makeFloat(op(asJsNumber(receiver), asJsNumber(args[0] as STValue)), u);
+}
+
+function floatCompare(op: (a: number, b: number) => boolean): Primitive {
+  return (receiver, args) => op(asJsNumber(receiver), asJsNumber(args[0] as STValue));
+}
+
+/** Float>>/ — divisor 0 => ZeroDivide (NO Infinity); si no, división Float. */
+function floatDivide(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const b = args[0] as STValue;
+  if (isZeroDivisor(b)) signalZeroDivide(u);
+  return makeFloat(asJsNumber(receiver) / asJsNumber(b), u);
+}
+
+/** Float>>abs / negated. */
+function floatAbs(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeFloat(Math.abs((receiver as STFloat).floatValue), u);
+}
+function floatNegated(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeFloat(-(receiver as STFloat).floatValue, u);
+}
+
+// ── L4 F2 · Character (boxed) · protocolo mínimo ────────────────────────────
+// asInteger/value => el code point (SmallInteger nativo). Las comparaciones < <= > >=
+// = ~= viven aquí (por code point); max:/min:/between:and: las hereda de Magnitude.
+
+function characterAsInteger(receiver: STValue): STValue {
+  return (receiver as STCharacter).codePoint;
+}
+
+function characterCompare(op: (a: number, b: number) => boolean): Primitive {
+  return (receiver, args) => {
+    const b = args[0] as STValue;
+    const bcp = isCharacter(b) ? b.codePoint : Number(b as number | bigint);
+    return op((receiver as STCharacter).codePoint, bcp);
+  };
+}
+
+/** Character>>= — igualdad por VALOR (code point); ~= su negación. */
+function characterEquals(receiver: STValue, args: STValue[]): STValue {
+  const b = args[0] as STValue;
+  return isCharacter(b) && (receiver as STCharacter).codePoint === b.codePoint;
+}
+function characterNotEquals(receiver: STValue, args: STValue[]): STValue {
+  return !(characterEquals(receiver, args) as boolean);
+}
+
+/** Float>>= — igualdad por VALOR (double); ~= su negación. Acepta Int coercido. */
+function floatEquals(receiver: STValue, args: STValue[]): STValue {
+  const b = args[0] as STValue;
+  if (isFloat(b)) return (receiver as STFloat).floatValue === b.floatValue;
+  if (typeof b === "number" || typeof b === "bigint") {
+    return (receiver as STFloat).floatValue === Number(b);
+  }
+  return false;
+}
+function floatNotEquals(receiver: STValue, args: STValue[]): STValue {
+  return !(floatEquals(receiver, args) as boolean);
 }
 
 /** Transcript>>show: acumula el argumento (texto) en el buffer del Transcript. */
@@ -163,8 +320,16 @@ function describeReceiver(receiver: STValue, u: Universe): string {
  * (classOf los mapea a True/False). number|bigint comparan numéricamente entre sí;
  * BigInt(a) <op> BigInt(b) cuando alguno es bigint, evitando coerción a number.
  */
-function compareSmallInteger(op: (a: bigint, b: bigint) => boolean): Primitive {
+function compareSmallInteger(
+  op: (a: bigint, b: bigint) => boolean,
+  fop: (a: number, b: number) => boolean,
+): Primitive {
   return (receiver: STValue, args: STValue[]): STValue => {
+    // L4 F2 · mixto con Float: compara como double (la presencia de un Float promueve
+    // la comparación a Float; el resultado es Boolean nativo, NO se boxea).
+    if (isFloat(args[0] as STValue)) {
+      return fop(Number(receiver as number | bigint), (args[0] as STFloat).floatValue);
+    }
     // BigInt en ambos lados: compara number y bigint correctamente sin coerción
     // lossy a number (un SmallInteger puede ser bigint tras promoción por overflow).
     return op(BigInt(receiver as number | bigint), BigInt(args[0] as number | bigint));
@@ -487,33 +652,111 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(u.symbols.intern("+"), smallIntegerPlus);
   u.SmallInteger.methodDict.set(u.symbols.intern("-"), smallIntegerMinus);
   u.SmallInteger.methodDict.set(u.symbols.intern("*"), smallIntegerTimes);
+  // L4 F2 · / abs negated (NUEVOS). / exacta=>Integer, no-exacta=>Float; /0=>ZeroDivide.
+  u.SmallInteger.methodDict.set(u.symbols.intern("/"), smallIntegerDivide);
+  u.SmallInteger.methodDict.set(u.symbols.intern("abs"), smallIntegerAbs);
+  u.SmallInteger.methodDict.set(u.symbols.intern("negated"), smallIntegerNegated);
   // timesRepeat: itera (DEV-004); el bucle vive en la primitiva, no en la AST.
   u.SmallInteger.methodDict.set(u.symbols.intern("timesRepeat:"), timesRepeat);
-  // Comparaciones: devuelven booleanos nativos (true/false -> True/False).
+  // Comparaciones: devuelven booleanos nativos (true/false -> True/False). El 2º
+  // comparador (sobre double) cubre el caso mixto con Float (L4 F2).
   u.SmallInteger.methodDict.set(
     u.symbols.intern("<"),
-    compareSmallInteger((a, b) => a < b),
+    compareSmallInteger(
+      (a, b) => a < b,
+      (a, b) => a < b,
+    ),
   );
   u.SmallInteger.methodDict.set(
     u.symbols.intern(">"),
-    compareSmallInteger((a, b) => a > b),
+    compareSmallInteger(
+      (a, b) => a > b,
+      (a, b) => a > b,
+    ),
   );
   u.SmallInteger.methodDict.set(
     u.symbols.intern("<="),
-    compareSmallInteger((a, b) => a <= b),
+    compareSmallInteger(
+      (a, b) => a <= b,
+      (a, b) => a <= b,
+    ),
   );
   u.SmallInteger.methodDict.set(
     u.symbols.intern(">="),
-    compareSmallInteger((a, b) => a >= b),
+    compareSmallInteger(
+      (a, b) => a >= b,
+      (a, b) => a >= b,
+    ),
   );
   u.SmallInteger.methodDict.set(
     u.symbols.intern("="),
-    compareSmallInteger((a, b) => a === b),
+    compareSmallInteger(
+      (a, b) => a === b,
+      (a, b) => a === b,
+    ),
   );
   u.SmallInteger.methodDict.set(
     u.symbols.intern("~="),
-    compareSmallInteger((a, b) => a !== b),
+    compareSmallInteger(
+      (a, b) => a !== b,
+      (a, b) => a !== b,
+    ),
   );
+  // ── L4 F2 · Float (boxed) · aritmética + comparación + abs/negated ──────────
+  u.Float.methodDict.set(
+    u.symbols.intern("+"),
+    floatBinary((a, b) => a + b),
+  );
+  u.Float.methodDict.set(
+    u.symbols.intern("-"),
+    floatBinary((a, b) => a - b),
+  );
+  u.Float.methodDict.set(
+    u.symbols.intern("*"),
+    floatBinary((a, b) => a * b),
+  );
+  u.Float.methodDict.set(u.symbols.intern("/"), floatDivide);
+  u.Float.methodDict.set(u.symbols.intern("abs"), floatAbs);
+  u.Float.methodDict.set(u.symbols.intern("negated"), floatNegated);
+  u.Float.methodDict.set(
+    u.symbols.intern("<"),
+    floatCompare((a, b) => a < b),
+  );
+  u.Float.methodDict.set(
+    u.symbols.intern(">"),
+    floatCompare((a, b) => a > b),
+  );
+  u.Float.methodDict.set(
+    u.symbols.intern("<="),
+    floatCompare((a, b) => a <= b),
+  );
+  u.Float.methodDict.set(
+    u.symbols.intern(">="),
+    floatCompare((a, b) => a >= b),
+  );
+  u.Float.methodDict.set(u.symbols.intern("="), floatEquals);
+  u.Float.methodDict.set(u.symbols.intern("~="), floatNotEquals);
+  // ── L4 F2 · Character (boxed) · asInteger/value + comparación ───────────────
+  u.Character.methodDict.set(u.symbols.intern("asInteger"), characterAsInteger);
+  u.Character.methodDict.set(u.symbols.intern("value"), characterAsInteger);
+  u.Character.methodDict.set(
+    u.symbols.intern("<"),
+    characterCompare((a, b) => a < b),
+  );
+  u.Character.methodDict.set(
+    u.symbols.intern(">"),
+    characterCompare((a, b) => a > b),
+  );
+  u.Character.methodDict.set(
+    u.symbols.intern("<="),
+    characterCompare((a, b) => a <= b),
+  );
+  u.Character.methodDict.set(
+    u.symbols.intern(">="),
+    characterCompare((a, b) => a >= b),
+  );
+  u.Character.methodDict.set(u.symbols.intern("="), characterEquals);
+  u.Character.methodDict.set(u.symbols.intern("~="), characterNotEquals);
   // Condicionales como sends reales (DEV-003): instalados en True/False, no inline.
   u.True.methodDict.set(u.symbols.intern("ifTrue:"), trueIfTrue);
   u.False.methodDict.set(u.symbols.intern("ifTrue:"), falseIfTrue);
