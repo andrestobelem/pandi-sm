@@ -17,6 +17,7 @@ import {
   makeCharacter,
   makeClassWithMetaclass,
   makeFloat,
+  makeInterval,
   makeOrderedCollection,
   notIdentical,
   type Primitive,
@@ -25,6 +26,7 @@ import {
   type STClass,
   type STClosure,
   type STFloat,
+  type STInterval,
   type STObject,
   type STOrderedCollection,
   type STSymbol,
@@ -249,6 +251,66 @@ function orderedNew(_receiver: STValue, _args: STValue[], u: Universe): STValue 
  */
 function orderedAsArray(receiver: STValue, _args: STValue[], u: Universe): STValue {
   return makeArray((receiver as STOrderedCollection).elements.slice(), u);
+}
+
+// ── L4 F4/S3 · Interval COMPUTADO · do:/at:/size + construcción (to:/to:by:) ─
+// El receptor es siempre un STInterval (campos from/to/by). El rango NO se materializa:
+// size se calcula, at: computa el i-ésimo término, do: itera reentrando al evaluador.
+// 1-based y origin=dialecto (igual que Array). collect:/select:/… los hereda de Collection.
+
+/** Cantidad de términos de un Interval (from/to/by), >= 0. (10 to: 1) o paso adverso => 0. */
+function intervalLength(iv: STInterval): number {
+  const span = iv.to - iv.from;
+  // Paso 0 sería un Interval mal formado; lo tratamos como vacío (defensivo, no debería ocurrir).
+  if (iv.by === 0) return 0;
+  const n = Math.floor(span / iv.by) + 1;
+  return n > 0 ? n : 0;
+}
+
+/** Interval>>size — la cantidad de términos (SmallInteger nativo). */
+function intervalSize(receiver: STValue): STValue {
+  return intervalLength(receiver as STInterval);
+}
+
+/** Interval>>at: index — el i-ésimo término 1-based: from + (i-1)*by. Fuera de rango señala. */
+function intervalAt(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const iv = receiver as STInterval;
+  const i = arrayIndex(args[0] as STValue, u);
+  const len = intervalLength(iv);
+  if (i < 1 || i > len) {
+    signalError(`Interval>>at:: índice ${i} fuera de rango 1..${len}`, u);
+  }
+  return iv.from + (i - 1) * iv.by;
+}
+
+/** Interval>>do: aBlock — itera los términos computados (from..to por by). Devuelve self. */
+function intervalDo(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const iv = receiver as STInterval;
+  const block = args[0] as STClosure;
+  const len = intervalLength(iv);
+  for (let k = 0; k < len; k++) {
+    evalBlock(block, [iv.from + k * iv.by], u);
+  }
+  return receiver;
+}
+
+/**
+ * SmallInteger>>to: stop — construye un Interval (from=self, to=stop, by=1). NO es el
+ * special-form de bucle (ése es `to:do:` con bloque literal, reconocido en eval.ts ANTES
+ * del envío). Un `(1 to: 5)` sin `do:` reifica el Interval; el caller decide qué hacer.
+ */
+function smallIntegerTo(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const from = Number(receiver as number | bigint);
+  const to = Number(args[0] as number | bigint);
+  return makeInterval(from, to, 1, u);
+}
+
+/** SmallInteger>>to:by: stop step — Interval con paso explícito (from=self, to=stop, by=step). */
+function smallIntegerToBy(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const from = Number(receiver as number | bigint);
+  const to = Number(args[0] as number | bigint);
+  const by = Number(args[1] as number | bigint);
+  return makeInterval(from, to, by, u);
 }
 
 /** SmallInteger>>/ (NUEVO L4 F2). Divisor 0 => SEÑALA ZeroDivide. Si algún operando es
@@ -878,6 +940,10 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(u.symbols.intern("asCharacter"), smallIntegerAsCharacter);
   // timesRepeat: itera (DEV-004); el bucle vive en la primitiva, no en la AST.
   u.SmallInteger.methodDict.set(u.symbols.intern("timesRepeat:"), timesRepeat);
+  // L4 F4/S3 · to:/to:by: construyen un Interval (NO el special-form de bucle, que es
+  // to:do:/to:by:do: con bloque literal, reconocido en eval.ts ANTES del envío).
+  u.SmallInteger.methodDict.set(u.symbols.intern("to:"), smallIntegerTo);
+  u.SmallInteger.methodDict.set(u.symbols.intern("to:by:"), smallIntegerToBy);
   // Comparaciones: devuelven booleanos nativos (true/false -> True/False). El 2º
   // comparador (sobre double) cubre el caso mixto con Float (L4 F2).
   u.SmallInteger.methodDict.set(
@@ -1001,6 +1067,13 @@ export function installPrimitives(u: Universe): void {
   u.OrderedCollection.methodDict.set(u.symbols.intern("size"), arraySize);
   u.OrderedCollection.methodDict.set(u.symbols.intern("add:"), orderedAdd);
   u.OrderedCollection.methodDict.set(u.symbols.intern("asArray"), orderedAsArray);
+  // ── L4 F4/S3 · Interval COMPUTADO · do:/at:/size propios (no leen `elements`) ──
+  // do: NO se hereda de Collection (esa primitiva itera `elements`, que Interval no tiene):
+  // Interval instala su PROPIA do:/at:/size que computan desde from/to/by. collect:/select:/
+  // …/inject:into:/includes: SÍ se heredan de Collection (sólo necesitan do:).
+  u.Interval.methodDict.set(u.symbols.intern("do:"), intervalDo);
+  u.Interval.methodDict.set(u.symbols.intern("at:"), intervalAt);
+  u.Interval.methodDict.set(u.symbols.intern("size"), intervalSize);
   // new growable (campo `elements: []`) en la metaclase de OrderedCollection (override del
   // new de Object class, que daría un basicNew sin `elements`).
   u.OrderedCollection.class.methodDict.set(u.symbols.intern("new"), orderedNew);

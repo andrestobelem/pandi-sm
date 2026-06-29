@@ -202,9 +202,34 @@ export interface STOrderedCollection extends STObject {
   elements: STValue[];
 }
 
+/**
+ * STInterval — Interval COMPUTADO (L4 F4/S3): un STObject (class = u.Interval) que NO
+ * guarda elementos, sino los tres números `from`/`to`/`by` en campos dedicados (mismo
+ * motivo que Float/Array: el acceso por nombre de ivar en cuerpos .st no está cableado).
+ * size/at:/do: se CALCULAN desde from/to/by (sin materializar el rango). `(1 to: 5)` y
+ * `(1 to: 10 by: 2)` reifican aquí. collect:/select:/… (heredados de Collection) producen
+ * un Array (species = Array para todo receptor secuenciable, origin=dialecto, §8.10).
+ */
+export interface STInterval extends STObject {
+  from: number;
+  to: number;
+  by: number;
+}
+
 /** ¿`v` es un Float boxed? (tiene el campo dedicado `floatValue`). */
 export function isFloat(v: STValue): v is STFloat {
   return typeof v === "object" && "class" in v && typeof (v as STFloat).floatValue === "number";
+}
+
+/** ¿`v` es un Interval computado? (tiene los campos dedicados from/to/by). */
+export function isInterval(v: STValue): v is STInterval {
+  return (
+    typeof v === "object" &&
+    "class" in v &&
+    typeof (v as STInterval).from === "number" &&
+    typeof (v as STInterval).to === "number" &&
+    typeof (v as STInterval).by === "number"
+  );
 }
 
 /**
@@ -260,6 +285,9 @@ export interface Universe {
   // L4 F3: colección growable (STObject con campo dedicado `elements`, igual que Array pero de
   // tamaño variable). Materializada en bootstrap; su add: hace push, su new arranca vacía.
   OrderedCollection: STClass;
+  // L4 F4/S3: Interval COMPUTADO (STObject con campos dedicados from/to/by, sin `elements`).
+  // size/at:/do: se calculan. (n to: m) / (n to: m by: k) lo reifican vía SmallInteger>>to:.
+  Interval: STClass;
   String: STClass;
   Boolean: STClass;
   True: STClass;
@@ -386,6 +414,25 @@ export function makeOrderedCollection(elements: STValue[], u: Universe): STOrder
     format: ObjectFormat.Pointers,
     pointers: [],
     elements,
+  };
+}
+
+/**
+ * makeInterval(from, to, by, u) — caja un rango como STInterval (class = u.Interval). Los
+ * tres números viven en campos dedicados; `pointers` queda vacío (no usa ivars). El rango NO
+ * se materializa (size/at:/do: lo computan). El hash nace estable/único (identidad por
+ * referencia para ==). `by` debe ser != 0 (un paso 0 daría un Interval mal formado; el caller
+ * — SmallInteger>>to: — siempre pasa 1 o el paso explícito).
+ */
+export function makeInterval(from: number, to: number, by: number, u: Universe): STInterval {
+  return {
+    class: u.Interval,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    from,
+    to,
+    by,
   };
 }
 

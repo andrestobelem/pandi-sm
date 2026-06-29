@@ -53,7 +53,16 @@ const COLLECTION_METHODS: string[] = [
  *   last  — el último elemento (at: self size).
  * Un receptor vacío hace que at: señale un Error (1 fuera de 1..0), comportamiento deseado.
  */
-const SEQUENCEABLE_METHODS: string[] = ["first [ ^self at: 1 ]", "last [ ^self at: self size ]"];
+const SEQUENCEABLE_METHODS: string[] = [
+  "first [ ^self at: 1 ]",
+  "last [ ^self at: self size ]",
+  // , (concat) — acumula self y el argumento en una OrderedCollection growable y devuelve
+  // asArray (species = Array, origin=dialecto). Expresado por do: puro (sin nombre de ivar).
+  ", aCollection [ | r | r := OrderedCollection new. self do: [:e | r add: e]. aCollection do: [:e | r add: e]. ^r asArray ]",
+  // copyFrom:to: — sub-rango 1-based INCLUSIVO, vía at:/un acumulador growable. from > to
+  // produce un Array vacío (el bucle to:do: no itera). Species = Array (asArray).
+  "copyFrom: from to: to [ | r | r := OrderedCollection new. from to: to do: [:i | r add: (self at: i)]. ^r asArray ]",
+];
 
 /**
  * loadCollectionMethods(u) — instala los métodos derivados de la base de colecciones (.st)

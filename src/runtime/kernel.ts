@@ -113,6 +113,11 @@ export function bootstrapKernel(): Universe {
   // (ordenada e indexable como Array, pero de tamaño variable). MVP: comparte el campo
   // `elements`; su add:/do:/at:/size son primitivas y hereda collect:/select:/… de Collection.
   const OrderedCollection = makeClass("OrderedCollection", SequenceableCollection, 0);
+  // L4 F4/S3 · Interval COMPUTADO: cuelga de SequenceableCollection (ordenado e indexable),
+  // pero sin `elements` (size/at:/do: se calculan de from/to/by). Su do:/at:/size son
+  // primitivas propias (no comparte la primitiva de Array, que lee `elements`); collect:/
+  // select:/… los hereda de Collection (producen un Array, species).
+  const Interval = makeClass("Interval", SequenceableCollection, 0);
   const String_ = makeClass("String", Object_, 0);
   // Boolean < Object; True/False < Boolean. true/false son booleans nativos JS
   // (classOf los mapea a True/False); estas clases existen para que ifTrue:/and:/not
@@ -158,6 +163,7 @@ export function bootstrapKernel(): Universe {
     SequenceableCollection,
     Array_,
     OrderedCollection,
+    Interval,
     String_,
     Boolean_,
     True_,
@@ -227,6 +233,7 @@ export function bootstrapKernel(): Universe {
     SequenceableCollection,
     Array_,
     OrderedCollection,
+    Interval,
     String_,
     Boolean_,
     True_,
@@ -249,6 +256,7 @@ export function bootstrapKernel(): Universe {
     Character,
     Array: Array_,
     OrderedCollection,
+    Interval,
     String: String_,
     Boolean: Boolean_,
     True: True_,

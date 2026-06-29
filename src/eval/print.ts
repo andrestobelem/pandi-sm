@@ -3,7 +3,7 @@
 // nil -> "nil"; otros STObject -> "a ClassName" (default Smalltalk).
 // El protocolo printOn:/displayString completo es L3-proper (diferido).
 
-import { isArray, isCharacter, isFloat, type STValue } from "../runtime/index.js";
+import { isArray, isCharacter, isFloat, isInterval, type STValue } from "../runtime/index.js";
 
 /** Imprime un double con punto SIEMPRE: 3.0 => "3.0" (distinguible de SmallInteger 3). */
 function printFloat(n: number): string {
@@ -40,6 +40,17 @@ export function printString(value: STValue): string {
     const inner = value.elements.map(printString).join(" ");
     if (value.class.name === "OrderedCollection") return `an OrderedCollection(${inner})`;
     return `#(${inner})`;
+  }
+  // L4 F4/S3 · Interval COMPUTADO => forma Pharo "(1 2 3 4 5)": los términos materializados
+  // entre paréntesis, separados por espacio (vacío => "()"). ANTES del default "an Interval".
+  if (isInterval(value)) {
+    const terms: string[] = [];
+    if (value.by !== 0) {
+      for (let v = value.from; value.by > 0 ? v <= value.to : v >= value.to; v += value.by) {
+        terms.push(printString(v));
+      }
+    }
+    return `(${terms.join(" ")})`;
   }
   // STObject: `nil` (única instancia de UndefinedObject) imprime "nil"; el resto
   // usa el default Smalltalk "a ClassName" (printOn:/displayString son L3-proper).
