@@ -29,7 +29,8 @@
     "test:coverage": "vitest run --coverage",
     "lint": "biome lint .",
     "format": "biome format --write .",
-    "st-run": "node -e \"console.error('pandi-sm st-run: no implementado todavia (la CLI llega con L4). Exit 2.'); process.exit(2)\""
+    "st-run": "node -e \"console.error('pandi-sm st-run: no implementado todavia (la CLI llega con L4). Exit 2.'); process.exit(2)\"",
+    "conformance": "tsx scripts/conformance.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
