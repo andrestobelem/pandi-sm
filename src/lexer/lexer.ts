@@ -631,7 +631,13 @@ class Lexer {
         break; // comilla de cierre
       }
       value += String.fromCodePoint(c);
+      const before = this.i;
       this.advance();
+      // advance() colapsa un CRLF a un solo salto de posición (this.i += 2), pero el
+      // VALOR del string sólo recibió el CR (peek de arriba). Re-añadimos el LF que
+      // advance() tragó para no truncar el contenido: el salto de posición es correcto,
+      // sólo faltaba reflejar ambos code points en el literal.
+      if (c === CP_CR && this.i === before + 2) value += "\n";
     }
     return value;
   }
