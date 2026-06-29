@@ -160,6 +160,13 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
       if (node.lit === "true") return true;
       if (node.lit === "false") return false;
       if (node.lit === "nil") return ctx.u.nil;
+      // scaledDecimal (`3.14s2`): el lexer/parser lo aceptan (DEV-011) pero ScaledDecimal
+      // como tipo numérico exacto está diferido. En vez de un throw de host NO capturable,
+      // señala un Error capturable por on:do: (no colapsamos a Float: cambiaría la semántica
+      // exacta en silencio). El soporte numérico real queda para L6.
+      if (node.lit === "scaledDecimal") {
+        return signalError(`scaledDecimal (${node.raw}) no soportado todavía (MVP)`, ctx.u);
+      }
       throw new Error(`literal no soportado en el skeleton: ${node.lit}`);
     }
     case "MessageSend":
