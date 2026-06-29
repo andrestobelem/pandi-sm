@@ -145,6 +145,27 @@ describe("L5 · negativo #3 — return/retry/resume fuera de un handler activo =
   it("resume: fuera de un handler activo lanza (se chequea el handler antes que la resumabilidad)", () => {
     expect(() => evalSt("Warning new resume: 1")).toThrow(/handler activo|active/i);
   });
+
+  // Regresión: una instancia STASHEADA y RE-MANEJADA no debe quedar con un
+  // activeHandler obsoleto. Tras salir su handler block, return:/retry/resume:
+  // sobre la MISMA instancia deben re-disparar el guard (no hacer no-op a nil).
+  it("return: sobre una instancia ya manejada (activeHandler obsoleto) lanza", () => {
+    expect(() =>
+      evalSt("| s | [Error signal] on: Error do: [:e | s := e. e return: 0]. s return: 5"),
+    ).toThrow(/handler activo|active/i);
+  });
+
+  it("retry sobre una instancia ya manejada (activeHandler obsoleto) lanza", () => {
+    expect(() =>
+      evalSt("| s | [Error signal] on: Error do: [:e | s := e. e return: 0]. s retry"),
+    ).toThrow(/handler activo|active/i);
+  });
+
+  it("resume: sobre una instancia ya resumida (activeHandler obsoleto) lanza", () => {
+    expect(() =>
+      evalSt("| s | [Warning signal] on: Warning do: [:e | s := e. e resume: 0]. s resume: 5"),
+    ).toThrow(/handler activo|active/i);
+  });
 });
 
 describe("L5 · cierre de integración ZeroDivide (manual; la aritmética // es L4)", () => {

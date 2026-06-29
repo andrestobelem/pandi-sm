@@ -128,9 +128,20 @@ function signalException(ex: STObject, u: Universe): STValue {
     if (hc.active && handles(hc.exceptionClass, ex)) {
       hc.active = false; // handler deshabilitado mientras corre (Squeak/Pharo)
       st.pendingAction = null;
+      // activeHandler vive SÓLO mientras el handler block corre: return:/retry/resume:
+      // sólo son válidos DENTRO de él (negativo #3). Guardamos el previo (handlers
+      // anidados) y lo restauramos SIEMPRE en finally, también si el block desenrolla.
+      // Sin esto, una instancia reutilizada fuera del handler mantendría activeHandler
+      // viejo y return:/retry/resume: harían no-op (nil) en vez de error.
+      const prevActiveHandler = st.activeHandler;
       st.activeHandler = hc;
-      // Fase 1: llamada NORMAL al handler block sobre el frame vivo de signalException.
-      const blockValue = evalBlock(hc.handlerBlock as STClosure, [ex], u);
+      let blockValue: STValue;
+      try {
+        // Fase 1: llamada NORMAL al handler block sobre el frame vivo de signalException.
+        blockValue = evalBlock(hc.handlerBlock as STClosure, [ex], u);
+      } finally {
+        st.activeHandler = prevActiveHandler;
+      }
       // El handler block pudo marcar pendingAction (return:/resume:/pass/...) por
       // efecto en el Side-Map; TS no ve la mutación tras el reset, así que la
       // releemos sin la estrechez de flujo. Sin marca => fallOff (return: del valor).
