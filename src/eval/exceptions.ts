@@ -6,14 +6,18 @@
 // Unwind plano (fase 2) que el on:do: dueño del marker reconoce; resume:/pass NO
 // desenrollan. defaultAction: Error propaga al top-level, Warning resume nil.
 //
-// Las acciones del handler (return:/resume:/pass/...) son primitivas que NO computan
-// el resultado: marcan una "pendingAction" en la excepción y devuelven nil; el frame
-// de signal() lee esa marca tras volver del handler block (modelo de §5.5.1 C/G donde
-// el HandlerAction es el "valor de retorno" del handler — aquí lo materializamos como
-// una marca leída por signal(), equivalente y sin un tercer throw).
+// Las acciones del handler (return:/resume:/retry/retryUsing:/pass) son TRANSFERENCIAS
+// NO LOCALES (plan §5.5.1 C/G): al invocarlas, el handler block se ABANDONA en el acto
+// lanzando un HandlerActionSignal etiquetado con el `token` de la activación de signal()
+// en curso. signalException() lo intercepta alrededor de la llamada al handler block e
+// interpreta la PRIMERA acción (gana la primera; las sentencias posteriores del handler
+// son inalcanzables). Esto hace que pass delegue de verdad (no lo pisa un return: tardío)
+// y que resume:/return: corten el flujo como en ANSI, en vez de marcar una "pendingAction"
+// leída sólo tras correr el block entero.
 
 import {
   basicNew,
+  HandlerActionSignal,
   type HandlerContext,
   type HomeMarker,
   type Primitive,
@@ -28,26 +32,22 @@ import { evalBlock } from "./eval.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Estado por-instancia de excepción (DRIFT instSize-no-acumulativo): el
-// messageText y la HandlerAction pendiente viven en un Side-Map por STObject,
+// messageText y el handler/token activos viven en un Side-Map por STObject,
 // no en slots de ivar (una subclase con instSize 0 no tendría el slot). Identidad
 // por referencia del STObject de la excepción.
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Acción del handler comunicada a signal() (HandlerAction de §5.5.1 C como marca). */
-type HandlerAction =
-  | { kind: "return"; value: STValue }
-  | { kind: "retry" }
-  | { kind: "retryUsing"; block: STClosure }
-  | { kind: "resume"; value: STValue }
-  | { kind: "pass" };
-
 /** Estado vivo de una instancia de excepción durante su señalamiento. */
 interface ExceptionState {
   messageText: STValue;
-  /** Marca puesta por return:/resume:/pass/... y leída por signal() tras el handler. */
-  pendingAction: HandlerAction | null;
   /** El HandlerContext en curso (para que return:/resume: sepan su marker/activación). */
   activeHandler: HandlerContext | null;
+  /**
+   * Token de la activación de signal() que corre el handler block AHORA. Las acciones
+   * del handler lanzan un HandlerActionSignal con este token; signalException() sólo
+   * intercepta el suyo (un signal re-entrante dentro del handler tiene otro token).
+   */
+  activeToken: object | null;
 }
 
 const exceptionState = new WeakMap<STObject, ExceptionState>();
@@ -56,7 +56,7 @@ const exceptionState = new WeakMap<STObject, ExceptionState>();
 function stateOf(ex: STObject, u: Universe): ExceptionState {
   let s = exceptionState.get(ex);
   if (s === undefined) {
-    s = { messageText: u.nil, pendingAction: null, activeHandler: null };
+    s = { messageText: u.nil, activeHandler: null, activeToken: null };
     exceptionState.set(ex, s);
   }
   return s;
@@ -116,8 +116,9 @@ function handles(selector: STValue, ex: STObject): boolean {
 // ─────────────────────────────────────────────────────────────────────────
 // signal() — el corazón (fase 1 sobre el frame vivo; fase 2 vía Unwind). Recorre
 // u.handlerStack de tope a base buscando el primer handler `active` cuyo `on:`
-// handles: la instancia; lo desactiva, corre su block, lee la HandlerAction marcada
-// y actúa. resume:/pass NO desenrollan; return:/retry/retryUsing:/fallOff sí.
+// handles: la instancia; lo desactiva, corre su block e intercepta el
+// HandlerActionSignal que la acción invocada lanza (gana la primera; fallOff si el
+// block terminó normal). resume:/pass NO desenrollan; return:/retry/retryUsing:/fallOff sí.
 // ─────────────────────────────────────────────────────────────────────────
 
 function signalException(ex: STObject, u: Universe): STValue {
@@ -127,27 +128,35 @@ function signalException(ex: STObject, u: Universe): STValue {
     const hc = u.handlerStack[i] as HandlerContext;
     if (hc.active && handles(hc.exceptionClass, ex)) {
       hc.active = false; // handler deshabilitado mientras corre (Squeak/Pharo)
-      st.pendingAction = null;
-      // activeHandler vive SÓLO mientras el handler block corre: return:/retry/resume:
-      // sólo son válidos DENTRO de él (negativo #3). Guardamos el previo (handlers
-      // anidados) y lo restauramos SIEMPRE en finally, también si el block desenrolla.
-      // Sin esto, una instancia reutilizada fuera del handler mantendría activeHandler
-      // viejo y return:/retry/resume: harían no-op (nil) en vez de error.
+      // activeHandler/activeToken viven SÓLO mientras el handler block corre:
+      // return:/retry/resume: sólo son válidos DENTRO de él (negativo #3). Guardamos
+      // los previos (handlers anidados / reuso de instancia) y los restauramos SIEMPRE
+      // en finally, también si el block desenrolla. El token identifica ESTA activación
+      // de signal(); las acciones lanzan un HandlerActionSignal con él y aquí sólo
+      // interceptamos el nuestro (un signal re-entrante dentro del block tiene otro).
       const prevActiveHandler = st.activeHandler;
+      const prevActiveToken = st.activeToken;
+      const token = {};
       st.activeHandler = hc;
-      let blockValue: STValue;
+      st.activeToken = token;
+      let action: HandlerActionSignal;
       try {
         // Fase 1: llamada NORMAL al handler block sobre el frame vivo de signalException.
-        blockValue = evalBlock(hc.handlerBlock as STClosure, [ex], u);
+        // Si el block invoca return:/resume:/retry/retryUsing:/pass, ABANDONA aquí por
+        // un HandlerActionSignal (gana la PRIMERA acción; lo posterior es inalcanzable).
+        const blockValue = evalBlock(hc.handlerBlock as STClosure, [ex], u);
+        // fallOff: el handler terminó sin invocar acción -> return: del valor del block.
+        action = new HandlerActionSignal(token, "return", blockValue);
+      } catch (e) {
+        if (e instanceof HandlerActionSignal && e.token === token) {
+          action = e; // la acción invocada por ESTE handler block
+        } else {
+          throw e; // Unwind/NonLocalReturn/HandlerActionSignal ajeno: sigue subiendo
+        }
       } finally {
         st.activeHandler = prevActiveHandler;
+        st.activeToken = prevActiveToken;
       }
-      // El handler block pudo marcar pendingAction (return:/resume:/pass/...) por
-      // efecto en el Side-Map; TS no ve la mutación tras el reset, así que la
-      // releemos sin la estrechez de flujo. Sin marca => fallOff (return: del valor).
-      const marked: HandlerAction | null = stateOf(ex, u).pendingAction;
-      const action: HandlerAction = marked ?? { kind: "return", value: blockValue };
-      // fallOff: el handler terminó sin invocar una acción -> return: del valor del block.
       switch (action.kind) {
         case "resume":
           hc.active = true; // sigue vigente para la continuación
@@ -161,7 +170,7 @@ function signalException(ex: STObject, u: Universe): STValue {
         case "retry":
           throw new Unwind(hc.marker, u.nil, true, true, hc.protectedBlock);
         case "retryUsing":
-          throw new Unwind(hc.marker, u.nil, true, true, action.block);
+          throw new Unwind(hc.marker, u.nil, true, true, action.block as STClosure);
       }
     }
     i--;
@@ -236,66 +245,63 @@ function instIsResumable(receiver: STValue, _args: STValue[], u: Universe): STVa
   return warning !== undefined && isKindOfClass(ex.class, warning);
 }
 
-// ── Acciones del handler (marcan pendingAction; signal() las interpreta) ────
+// ── Acciones del handler (TRANSFEREN no-localmente al frame de signal vía throw) ──
+// Cada acción ABANDONA el handler block en el acto: lanza un HandlerActionSignal con
+// el token de la activación de signal() en curso. signalException() la intercepta e
+// interpreta la PRIMERA (lo posterior en el handler block nunca corre). Fuera de un
+// handler activo (activeToken === null) es un error (negativo #3).
 
-function requireActiveHandler(ex: STObject, u: Universe): ExceptionState {
+function requireActiveToken(ex: STObject, u: Universe): object {
   const st = stateOf(ex, u);
-  if (st.activeHandler === null) {
+  if (st.activeHandler === null || st.activeToken === null) {
     // return/retry/resume fuera de un handler activo = error (negativo #3).
     throw new Error("acción de handler fuera de un handler activo");
   }
-  return st;
+  return st.activeToken;
 }
 
 function handlerReturn(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const st = requireActiveHandler(receiver as STObject, u);
-  st.pendingAction = { kind: "return", value: (args[0] ?? u.nil) as STValue };
-  return u.nil;
+  const token = requireActiveToken(receiver as STObject, u);
+  throw new HandlerActionSignal(token, "return", (args[0] ?? u.nil) as STValue);
 }
 
 function handlerReturnNil(receiver: STValue, _args: STValue[], u: Universe): STValue {
-  const st = requireActiveHandler(receiver as STObject, u);
-  st.pendingAction = { kind: "return", value: u.nil };
-  return u.nil;
+  const token = requireActiveToken(receiver as STObject, u);
+  throw new HandlerActionSignal(token, "return", u.nil);
 }
 
 function handlerRetry(receiver: STValue, _args: STValue[], u: Universe): STValue {
-  const st = requireActiveHandler(receiver as STObject, u);
-  st.pendingAction = { kind: "retry" };
-  return u.nil;
+  const token = requireActiveToken(receiver as STObject, u);
+  throw new HandlerActionSignal(token, "retry", u.nil);
 }
 
 function handlerRetryUsing(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const st = requireActiveHandler(receiver as STObject, u);
-  st.pendingAction = { kind: "retryUsing", block: args[0] as STClosure };
-  return u.nil;
+  const token = requireActiveToken(receiver as STObject, u);
+  throw new HandlerActionSignal(token, "retryUsing", u.nil, args[0] as STClosure);
 }
 
 function handlerResume(receiver: STValue, args: STValue[], u: Universe): STValue {
   const ex = receiver as STObject;
-  const st = requireActiveHandler(ex, u);
+  const token = requireActiveToken(ex, u);
   if (!isResumableInstance(ex, u)) {
     // resume de no-resumable: política de ingeniería (ANSI-erroneous) -> Error (negativo #1/#2).
     throw new Error(`resume de excepción no resumable: ${ex.class.name}`);
   }
-  st.pendingAction = { kind: "resume", value: (args[0] ?? u.nil) as STValue };
-  return u.nil;
+  throw new HandlerActionSignal(token, "resume", (args[0] ?? u.nil) as STValue);
 }
 
 function handlerResumeNil(receiver: STValue, _args: STValue[], u: Universe): STValue {
   const ex = receiver as STObject;
-  const st = requireActiveHandler(ex, u);
+  const token = requireActiveToken(ex, u);
   if (!isResumableInstance(ex, u)) {
     throw new Error(`resume de excepción no resumable: ${ex.class.name}`);
   }
-  st.pendingAction = { kind: "resume", value: u.nil };
-  return u.nil;
+  throw new HandlerActionSignal(token, "resume", u.nil);
 }
 
 function handlerPass(receiver: STValue, _args: STValue[], u: Universe): STValue {
-  const st = requireActiveHandler(receiver as STObject, u);
-  st.pendingAction = { kind: "pass" };
-  return u.nil;
+  const token = requireActiveToken(receiver as STObject, u);
+  throw new HandlerActionSignal(token, "pass", u.nil);
 }
 
 /** ¿La instancia es resumable? (Warning sí; el resto no, plan §5.5). */

@@ -81,6 +81,27 @@ export class Unwind {
 }
 
 /**
+ * HandlerActionSignal — transferencia NO LOCAL de una acción de handler (return:/
+ * resume:/retry/retryUsing:/pass) hacia el frame de signal() que corre el handler
+ * block (plan §5.5.1 C/G). Objeto JS PLANO (NO extends Error, igual que Unwind/
+ * NonLocalReturn). El handler block ABANDONA inmediatamente al invocar la acción
+ * (las sentencias posteriores son inalcanzables; gana la PRIMERA acción). `token`
+ * identifica la activación de signal() que debe interceptarlo: un signal re-entrante
+ * dentro del handler block tiene su propio token, así su acción no se confunde con
+ * la del handler externo. `value`/`block` portan el argumento de la acción.
+ */
+export type HandlerActionKind = "return" | "retry" | "retryUsing" | "resume" | "pass";
+
+export class HandlerActionSignal {
+  constructor(
+    readonly token: object,
+    readonly kind: HandlerActionKind,
+    readonly value: STValue,
+    readonly block: STValue | null = null,
+  ) {}
+}
+
+/**
  * HandlerContext — entrada de la handlerStack del heap (plan §5.5.1 §523/G). Un
  * on:do: empuja uno por handler; signal() la recorre de tope a base buscando el
  * primer `active` cuyo exceptionClass `handles:` la excepción. `active=false`

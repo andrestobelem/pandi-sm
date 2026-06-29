@@ -6,6 +6,8 @@ export { bootstrapKernel, makeClassWithMetaclass } from "./kernel.js";
 export {
   basicNew,
   classOf,
+  type HandlerActionKind,
+  HandlerActionSignal,
   type HandlerContext,
   type HomeMarker,
   identical,

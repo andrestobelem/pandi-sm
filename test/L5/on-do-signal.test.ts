@@ -93,6 +93,40 @@ describe("L5 · pass (positivo #12)", () => {
   });
 });
 
+describe("L5 · acciones del handler son TRANSFERENCIAS no-locales (REPAIR r2)", () => {
+  // El handler block se ABANDONA al invocar la acción: las sentencias posteriores son
+  // inalcanzables y GANA LA PRIMERA acción (no la última). Antes del fix las acciones
+  // marcaban una pendingAction y el block seguía corriendo (last-wins, pass pisado).
+
+  it("return: corta el handler: la sentencia siguiente NO corre (gana la primera, vale 1)", () => {
+    // Sin el fix: el segundo return: pisaba al primero (devolvía 2).
+    expect(
+      printString(evalSt("[Error signal] on: Error do: [:e | e return: 1. e return: 2]")),
+    ).toBe("1");
+  });
+
+  it("return: corta el handler: una sentencia rota posterior NUNCA se evalúa (vale 1)", () => {
+    // Sin el fix: `nil boom` corría tras el return: y lanzaba doesNotUnderstand.
+    expect(printString(evalSt("[Error signal] on: Error do: [:e | e return: 1. nil boom]"))).toBe(
+      "1",
+    );
+  });
+
+  it("pass delega de verdad al externo: un return: tras el pass NO lo pisa (vale 5)", () => {
+    // Sin el fix: el pass marcaba la delegación pero el return: 1 posterior la sobrescribía
+    // (devolvía 1). Con la transferencia no-local, el pass abandona el handler y delega.
+    const src =
+      "[[Error signal] on: Error do: [:e | e pass. e return: 1]] on: Error do: [:e | e return: 5]";
+    expect(printString(evalSt(src))).toBe("5");
+  });
+
+  it("retry corta el handler: la sentencia tras el retry NO corre (traza 'rdone', no 'rTRAILdone')", () => {
+    const src =
+      "| n | n := 0. [n := n + 1. n < 2 ifTrue: [Error signal]. Transcript show: 'done'] on: Error do: [:e | Transcript show: 'r'. e retry. Transcript show: 'TRAIL']";
+    expect(trace(src)).toBe("rdone");
+  });
+});
+
 describe("L5 · signal: (positivo #13) fija messageText recuperable", () => {
   it("el handler lee el messageText fijado por signal:", () => {
     const src = "[Error signal: 'boom'] on: Error do: [:e | e messageText]";

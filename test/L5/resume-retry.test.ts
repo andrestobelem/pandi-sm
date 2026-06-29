@@ -88,6 +88,28 @@ describe("L5 · resume: (positivo #10) hace que signal devuelva v y el bloque co
   });
 });
 
+describe("L5 · resume: es transferencia no-local inmediata (REPAIR r2)", () => {
+  // resume: DEVUELVE al punto del signal en el acto: las sentencias del handler tras el
+  // resume: son inalcanzables. Antes del fix la continuación corría DESPUÉS del resto del
+  // handler block (traza 'AFTERk' en vez de 'k') y un return: posterior pisaba el resume.
+
+  it("la continuación del signal corre tras un resume: y la sentencia post-resume NO (traza 'k')", () => {
+    // Sin el fix: 'AFTERk' (el handler seguía corriendo y luego resumía). Con el fix: 'k'.
+    const src =
+      "[Warning signal. Transcript show: 'k'] on: Warning do: [:e | e resume: 1. Transcript show: 'AFTER']";
+    expect(trace(src)).toBe("k");
+  });
+
+  it("resume: gana sobre un return: posterior: el signal resume y la expresión continúa (100)", () => {
+    // Sin el fix: el return: 7 posterior pisaba el resume (devolvía 7). Con el fix: 99 + 1 = 100.
+    expect(
+      printString(
+        evalSt("[(Warning signal) + 1] on: Warning do: [:e | e resume: 99. e return: 7]"),
+      ),
+    ).toBe("100");
+  });
+});
+
 describe("L5 · resume == resume: nil (positivo #11)", () => {
   it("resume (sin arg) hace que (Warning signal) valga nil", () => {
     expect(printString(evalSt("[(Warning signal) isNil] on: Warning do: [:e | e resume]"))).toBe(
