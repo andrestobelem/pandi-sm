@@ -39,7 +39,7 @@ import { loadCollectionMethods } from "./kernel-collections.js";
 import { KERNEL_EXCEPTION_SOURCES } from "./kernel-exceptions.js";
 import { loadKernelSources } from "./kernel-loader.js";
 import { loadNumericMethods } from "./kernel-numerics.js";
-import { installPrimitives } from "./primitives.js";
+import { installPrimitives, intervalEndpoint } from "./primitives.js";
 import { send, superSend } from "./send.js";
 
 /**
@@ -296,21 +296,29 @@ function tryLoopSpecialForm(node: MessageSendNode, ctx: EvalCtx): STValue | type
       const body = node.args[1];
       if (body === undefined || !isLiteralBlock(body)) return NO_LOOP;
       // Receptor/cota se evalúan UNA vez (un side-effect en ellos ocurre una sola vez).
-      const receiver = evalNode(node.receiver, ctx);
-      const stop = Number(evalNode(node.args[0] as Expression, ctx) as number | bigint);
+      const receiverValue = evalNode(node.receiver, ctx);
+      // Guard de cota segura (DEV-035): el camino con bloque LITERAL no pasa por
+      // smallIntegerTo, así que aplicamos AQUÍ el mismo intervalEndpoint. Sin él, un
+      // `Number(cota)` ciego colapsa a NaN (cota Float => 0 iteraciones silenciosas) o
+      // corre ~10^21 vueltas (cota bigint > 2^53-1 => CUELGA). Ahora señala un Error
+      // capturable por on:do: ANTES de iterar, en vez de colgar o miscomputar en silencio.
+      const start = intervalEndpoint(receiverValue, "inicio", u);
+      const stop = intervalEndpoint(evalNode(node.args[0] as Expression, ctx), "fin", u);
       const bodyClosure = makeClosure(body, ctx);
-      for (let i = Number(receiver as number | bigint); i <= stop; i++) {
+      for (let i = start; i <= stop; i++) {
         evalBlock(bodyClosure, [i], u);
       }
-      return receiver; // to:do: devuelve el receptor.
+      return receiverValue; // to:do: devuelve el receptor.
     }
     case "to:by:do:": {
       const body = node.args[2];
       if (body === undefined || !isLiteralBlock(body)) return NO_LOOP;
-      const receiver = evalNode(node.receiver, ctx);
-      const start = Number(receiver as number | bigint);
-      const stop = Number(evalNode(node.args[0] as Expression, ctx) as number | bigint);
-      const step = Number(evalNode(node.args[1] as Expression, ctx) as number | bigint);
+      const receiverValue = evalNode(node.receiver, ctx);
+      // Mismo guard de cota/paso seguro que to:do: (DEV-035): un paso/extremo Float o
+      // bigint inseguro señala un Error capturable ANTES de iterar (no NaN-silencio ni cuelgue).
+      const start = intervalEndpoint(receiverValue, "inicio", u);
+      const stop = intervalEndpoint(evalNode(node.args[0] as Expression, ctx), "fin", u);
+      const step = intervalEndpoint(evalNode(node.args[1] as Expression, ctx), "paso", u);
       const bodyClosure = makeClosure(body, ctx);
       if (step > 0) {
         for (let i = start; i <= stop; i += step) evalBlock(bodyClosure, [i], u);
@@ -319,7 +327,7 @@ function tryLoopSpecialForm(node: MessageSendNode, ctx: EvalCtx): STValue | type
       }
       // step === 0 no itera (evita bucle infinito); SmallInteger>>to:by:do: con
       // paso 0 es erróneo en Smalltalk, lo dejamos como no-op determinista.
-      return receiver; // to:by:do: devuelve el receptor.
+      return receiverValue; // to:by:do: devuelve el receptor.
     }
     default:
       return NO_LOOP;

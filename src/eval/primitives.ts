@@ -305,8 +305,14 @@ function intervalDo(receiver: STValue, args: STValue[], u: Universe): STValue {
  *       dando size/at:/last erróneos Y un bucle de impresión que no avanza (1e21+1===1e21).
  * En ambos casos señalamos un Error genérico capturable (mismo enrutado L5 que at: fuera de
  * rango), en vez de miscomputar en silencio. `label` identifica el operando en el mensaje.
+ *
+ * EXPORTADO porque el special-form de bucle (to:do:/to:by:do:, eval.ts) DEBE aplicar el
+ * MISMO guard sobre sus cotas/paso ANTES de iterar: el camino con bloque LITERAL nunca llega
+ * a smallIntegerTo, así que sin este guard un `Number(bound)` ciego o (a) colapsa a NaN
+ * (paso/cota Float => `i <= NaN` falso => 0 iteraciones SILENCIOSAS) o (b) corre ~10^21
+ * iteraciones (cota bigint > 2^53-1 => CUELGA). Reusar el guard cierra ambos huecos.
  */
-function intervalEndpoint(v: STValue, label: string, u: Universe): number {
+export function intervalEndpoint(v: STValue, label: string, u: Universe): number {
   if (isFloat(v)) {
     signalError(`Interval con ${label} no entero (${hostPrintString(v)}) no soportado (MVP)`, u);
   }

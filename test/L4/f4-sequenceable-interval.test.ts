@@ -193,3 +193,43 @@ describe("L4 · F4 · S3 · REGRESIÓN: to:do: con bloque literal sigue iterando
     expect(printString(evalSt(src))).toBe("25");
   });
 });
+
+describe("L4 · F4 · S3 · to:do: special-form (bloque literal) aplica el guard de cota segura", () => {
+  // Ronda 2 de reparación: el camino con bloque LITERAL (special-form en eval.ts) NUNCA
+  // llega a smallIntegerTo, así que ANTES no aplicaba el guard de intervalEndpoint. Un
+  // `Number(cota)` ciego o (a) corre ~10^21 iteraciones y CUELGA (cota bigint fuera de
+  // 2^53-1), o (b) colapsa a NaN y hace 0 iteraciones EN SILENCIO (cota/paso Float). Ambos
+  // casos deben señalar un Error capturable por on:do: (mismo enrutado L5 que el camino
+  // de mensaje), no colgar ni miscomputar.
+
+  it("to:do: con cota bigint fuera del rango seguro NO cuelga: señala antes de iterar", () => {
+    const src = `[ 1 to: 1000000000000000000000 do: [:i | i] ] on: Error do: [:e | #caught ]`;
+    expect(printString(evalSt(src))).toBe("#caught");
+  });
+
+  it("to:do: con cota Float señala un Error (no colapsa a 0 iteraciones silenciosas)", () => {
+    const src = `
+      [ | s | s := 0. 1 to: 5.0 do: [:i | s := s + 1]. s ] on: Error do: [:e | #caught ]`;
+    expect(printString(evalSt(src))).toBe("#caught");
+  });
+
+  it("to:by:do: con paso Float señala un Error (no colapsa a 0 iteraciones silenciosas)", () => {
+    const src = `
+      [ | s | s := 0. 1 to: 5 by: 0.5 do: [:i | s := s + 1]. s ] on: Error do: [:e | #caught ]`;
+    expect(printString(evalSt(src))).toBe("#caught");
+  });
+
+  it("to:by:do: con cota Float señala un Error", () => {
+    const src = `[ 1 to: 5.0 by: 1 do: [:i | i] ] on: Error do: [:e | #caught ]`;
+    expect(printString(evalSt(src))).toBe("#caught");
+  });
+
+  it("REGRESIÓN: to:do: con cotas enteras seguras sigue iterando (suma 15)", () => {
+    const src = `
+      | sum |
+      sum := 0.
+      1 to: 5 do: [:i | sum := sum + i].
+      sum`;
+    expect(printString(evalSt(src))).toBe("15");
+  });
+});
