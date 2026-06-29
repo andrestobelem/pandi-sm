@@ -201,7 +201,14 @@ function smallIntegerAsCharacter(receiver: STValue, _args: STValue[], u: Univers
 function characterCompare(op: (a: number, b: number) => boolean): Primitive {
   return (receiver, args) => {
     const b = args[0] as STValue;
-    const bcp = isCharacter(b) ? b.codePoint : Number(b as number | bigint);
+    // Un Float boxed es un STObject: Number(<STObject>) daría NaN y TODA comparación
+    // contra NaN sería false (un valor silenciosamente erróneo). Derivamos el double del
+    // campo dedicado vía isFloat ANTES de caer al Number() de un SmallInteger nativo.
+    const bcp = isFloat(b)
+      ? b.floatValue
+      : isCharacter(b)
+        ? b.codePoint
+        : Number(b as number | bigint);
     return op((receiver as STCharacter).codePoint, bcp);
   };
 }
