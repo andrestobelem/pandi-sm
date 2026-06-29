@@ -254,7 +254,18 @@ export function evalBlock(closure: STClosure, args: STValue[], u: Universe): STV
     closure.definingClass !== undefined
       ? { scope, u, definingClass: closure.definingClass }
       : { scope, u };
-  return evalSequence(closure.node.body, ctx);
+  try {
+    return evalSequence(closure.node.body, ctx);
+  } catch (e) {
+    // `^` desde un bloque cuyo método de origen YA retornó (home muerto): en vez de
+    // dejar escapar un NonLocalReturn crudo (no es Error, INcapturable por on:do:),
+    // lo convertimos en un BlockCannotReturn capturable (ANSI). Un NLR a un home VIVO
+    // se relanza intacto para que su activate()/evalWith lo capture por identidad.
+    if (e instanceof NonLocalReturn && e.home.dead === true) {
+      signalError("BlockCannotReturn: el método de origen del bloque ya retornó", u);
+    }
+    throw e;
+  }
 }
 
 /** Evalúa receptor y argumentos, luego despacha por send(). */

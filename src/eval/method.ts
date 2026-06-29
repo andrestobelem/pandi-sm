@@ -161,6 +161,10 @@ function activate(
     // (p.ej. de un método llamante) se relanza para que su propia frontera lo capture.
     if (e instanceof NonLocalReturn && e.home === home) return e.value;
     throw e;
+  } finally {
+    // El método ya retornó (normal, `^`, o un throw que lo atraviesa): su home muere.
+    // Un `^` posterior desde un bloque que lo capturó es un BlockCannotReturn (evalBlock).
+    home.dead = true;
   }
   // Sin `^` explícito: un método devuelve self (NO el valor del último statement).
   return receiver;

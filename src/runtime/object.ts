@@ -31,8 +31,10 @@ export interface STObject {
  * Marcador de "home context" (plan §5.3): identidad por referencia (`===`). Un
  * `^` dentro de un bloque desenrolla hasta el home capturado en su creación. En
  * S1 el cierre sólo lo guarda; el unwind por NonLocalReturn llega en S3.
+ * `dead` lo marca activate() al salir del método: un `^` desde un bloque cuyo home
+ * ya retornó es un BlockCannotReturn capturable (no un NonLocalReturn que escapa).
  */
-export type HomeMarker = object;
+export type HomeMarker = { dead?: boolean };
 
 /**
  * NonLocalReturn — objeto de control-flow del `^` (plan §2/§5.3, V8-2): una clase
