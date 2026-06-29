@@ -8,9 +8,15 @@ import { isCharacter, isFloat, type STValue } from "../runtime/index.js";
 /** Imprime un double con punto SIEMPRE: 3.0 => "3.0" (distinguible de SmallInteger 3). */
 function printFloat(n: number): string {
   if (!Number.isFinite(n)) return String(n); // Infinity/NaN tal cual (raros en el MVP)
-  // Number.isInteger(3.0) es true: String(3.0) daría "3"; forzamos el ".0" para que
-  // un Float boxed nunca colisione con la impresión de un SmallInteger.
-  return Number.isInteger(n) ? `${n}.0` : String(n);
+  const s = String(n);
+  // Magnitud en notación exponencial (|n| >= 1e21): String(n) ya da p.ej. "1e+21"
+  // (entero PERO con exponente). NO añadir ".0" -> daría "1e+21.0", malformado e
+  // imparseable. El 'e' ya distingue el Float del SmallInteger; normalizamos el '+'
+  // del exponente JS ("1e+21" -> "1e21", forma Smalltalk; "1e-7" queda igual).
+  if (s.includes("e") || s.includes("E")) return s.replace("e+", "e");
+  // Sin punto ni exponente => entero exacto (3.0, 1000): forzamos ".0" para que un
+  // Float boxed nunca colisione con la impresión de un SmallInteger.
+  return s.includes(".") ? s : `${s}.0`;
 }
 
 /** printString(value): texto que el harness compara con === (p.ej. "14"). */

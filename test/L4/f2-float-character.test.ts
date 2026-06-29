@@ -68,6 +68,15 @@ describe("L4 · F2 · S3 · evaluación de literales Float", () => {
     // `1e3` es entero en valor pero Float en tipo (notación científica): imprime con punto.
     expect(printString(evalSt("1e3 class name"))).toBe("Float");
   });
+
+  it("Float integral en rango exponencial (|n|>=1e21) NO añade '.0' espurio", () => {
+    // Regresión: printFloat hacía `${1e21}.0` => "1e+21.0" (malformado/imparseable).
+    // String(1e21) ya es "1e+21"; normalizamos el '+' del exponente a forma Smalltalk.
+    expect(printString(evalSt("1e21"))).toBe("1e21");
+    expect(printString(evalSt("1e22"))).toBe("1e22");
+    expect(printString(evalSt("1.5e300 + 1.5e300"))).toBe("3e300");
+    expect(printString(evalSt("1e21 negated"))).toBe("-1e21");
+  });
 });
 
 describe("L4 · F2 · S3 · GATE-F2-ZERODIVIDE · Float/0 uniforme con Integer (§8.2)", () => {
