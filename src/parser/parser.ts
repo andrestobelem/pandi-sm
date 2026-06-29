@@ -58,6 +58,13 @@ class Parser {
     return t;
   }
 
+  /** Posición del token actual. Público para que el catch de E_NESTING_LIMIT
+   * reporte el SITIO de la anidación (el descenso recursivo avanzó `i` hasta ahí
+   * antes de desbordar el stack), no siempre el primer token. */
+  currentPos(): Position {
+    return this.peek().span.start;
+  }
+
   private error(code: ParseErrorCode, span: SourceSpan, message: string): void {
     this.errors.push({ code, span, message });
   }
@@ -112,7 +119,11 @@ class Parser {
       // (`3 := 4`, `a foo := 1`) => `:=` inesperado. Determinista por code+span.
       if (this.peek().type === "assignmentOperator") {
         this.error("E_UNEXPECTED_TOKEN", this.peek().span, "target no asignable: :=");
-        break;
+        // Recuperación: consumimos el `:=` y SEGUIMOS (no rompemos el bucle). Romper
+        // dejaba el `:=` sin consumir y, dentro de un bloque, peek≠`]` disparaba un
+        // E_UNCLOSED_BLOCK espurio aunque el `]` estuviera presente (`[a foo := 1]`).
+        this.advance();
+        continue;
       }
       // Separador de statements: `.`.
       if (this.peek().type === "period") {
@@ -446,10 +457,29 @@ class Parser {
     const params: VariableNode[] = [];
     while (this.peek().type === "colon") {
       this.advance(); // `:`
-      if (this.peek().type === "identifier") params.push(this.variable(this.advance()));
+      if (this.peek().type === "identifier") {
+        params.push(this.variable(this.advance()));
+      } else {
+        // `:` sin identificador (`[:3]`, `[: |]`): parámetro malformado (DEV-015/R3).
+        this.error(
+          "E_UNEXPECTED_TOKEN",
+          this.peek().span,
+          `parámetro de bloque sin nombre tras ':': ${this.peek().type}`,
+        );
+        break;
+      }
     }
-    // El `|` terminador de params sólo aparece si hubo params (DEV-015).
-    if (params.length > 0 && this.peek().type === "verticalBar") this.advance();
+    // El `|` terminador de params es OBLIGATORIO si hubo params (DEV-015). Su ausencia
+    // (`[:a :b expr]`) es un error de sintaxis, no un cuerpo que arranca con un param.
+    if (params.length > 0) {
+      if (this.peek().type === "verticalBar") this.advance();
+      else
+        this.error(
+          "E_UNEXPECTED_TOKEN",
+          this.peek().span,
+          `falta '|' tras los parámetros del bloque: ${this.peek().type}`,
+        );
+    }
     const body = this.parseSequence("rbracket");
     if (this.peek().type === "rbracket") {
       const close = this.advance();
@@ -727,7 +757,8 @@ export function parse(source: string): {
     // Cualquier otra excepción es un bug real y se re-lanza (no la enmascaramos).
     if (e instanceof RangeError) {
       const zero: Position = { offset: 0, line: 1, column: 1 };
-      const at = lexed.tokens[0]?.span.start ?? zero;
+      // El sitio de la anidación (token alcanzado al desbordar), no siempre tokens[0].
+      const at = parser.currentPos() ?? lexed.tokens[0]?.span.start ?? zero;
       const nesting: ParseError = {
         code: "E_NESTING_LIMIT",
         span: { start: at, end: at },

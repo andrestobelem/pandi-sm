@@ -20,7 +20,8 @@ const run = (code: string): string => printString(evalSt(code));
 //   Fix: validar Number.isInteger ⇒ Error capturable (como Array>>at:).
 // ─────────────────────────────────────────────────────────────────────────────
 describe("followup · instVarAt: índice no-entero señala Error capturable (no crash de host)", () => {
-  const defPt = "Object subclass: #FU1 instanceVariableNames: 'x y' classVariableNames: '' package: 'T'.";
+  const defPt =
+    "Object subclass: #FU1 instanceVariableNames: 'x y' classVariableNames: '' package: 'T'.";
 
   it("instVarAt: 1.5 sobre objeto de 2 ivars es capturable por on:do:", () => {
     expect(run(`${defPt} [FU1 new instVarAt: 1.5] on: Error do: [:e | #caught]`)).toBe("#caught");
@@ -46,9 +47,9 @@ describe("followup · instVarAt: índice no-entero señala Error capturable (no 
 describe("followup · isExceptionSet no confunde un Array con un ExceptionSet", () => {
   it("on: {ZeroDivide} do: NO captura (un Array no es un handler-set válido)", () => {
     // El Array no maneja la excepción ⇒ no la captura ⇒ el handler externo (Error) sí.
-    expect(
-      run("[[1/0] on: {ZeroDivide} do: [:e | #inner]] on: Error do: [:e | #outer]"),
-    ).toBe("#outer");
+    expect(run("[[1/0] on: {ZeroDivide} do: [:e | #inner]] on: Error do: [:e | #outer]")).toBe(
+      "#outer",
+    );
   });
 
   it("un ExceptionSet REAL (Error , ZeroDivide) sigue capturando", () => {
