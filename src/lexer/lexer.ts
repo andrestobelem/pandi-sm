@@ -317,11 +317,12 @@ class Lexer {
     }
   }
 
-  // El `-` (this.i) va pegado a un dígito, o a `.`dígito ⇒ es un literal numérico.
+  // El `-` (this.i) va pegado a un dígito ⇒ es un literal numérico.
+  // La rama `.`dígito se elimina (DEV-NNN): '-.5' se tokeniza como binarySelector('-')
+  // + period('.') + integer(5), simétrico con '.5' que ya produce period+integer.
+  // Un float negativo con parte entera se escribe '-0.5', no '-.5'.
   private startsNumberAfterSign(): boolean {
-    const next = this.cpAt(this.i + 1);
-    if (isDigit(next)) return true;
-    return next === CP_PERIOD && isDigit(this.cpAt(this.i + 2));
+    return isDigit(this.cpAt(this.i + 1));
   }
 
   // Autómata numérico (R4/R7): decimalInteger | radix | float (e/d/q) | scaledDecimal.
@@ -366,10 +367,37 @@ class Lexer {
         if (hasSign) this.advance(); // signo
         while (isDigit(this.peek())) this.advance();
       } else if (hasSign) {
-        // `1.5e+` / `1e-`: letra+signo SIN dígito ⇒ negativo real (R7/R10).
+        // `1.5e+` / `1e-`: letra+signo SIN dígito ⇒ mantissa ya escaneada se emite,
+        // luego E_EXPONENT_MALFORMED (R7/R10). Guardamos el fin de la mantissa ANTES
+        // de consumir la letra y el signo.
+        const mantissaEnd = this.pos();
         this.advance(); // letra
         this.advance(); // signo
         this.error("E_EXPONENT_MALFORMED", start, "exponente sin dígitos");
+        // Emite la mantissa como número parcial (float si tenía fracción, entero si no).
+        if (isFloat) {
+          const raw = this.src.slice(start.offset, mantissaEnd.offset);
+          const value = Number.parseFloat(raw.replace(/[dq]/i, "e"));
+          const marker = raw.match(/[edqEDQ]/)?.[0]?.toLowerCase();
+          const floatKind: "e" | "d" | "q" | undefined =
+            marker === "d" ? "d" : marker === "q" ? "q" : marker === "e" ? "e" : undefined;
+          this.tokens.push({
+            type: "number",
+            lexeme: raw,
+            value,
+            numKind: "float",
+            ...(floatKind !== undefined ? { floatKind } : {}),
+            span: { start, end: mantissaEnd },
+          });
+        } else {
+          this.tokens.push({
+            type: "number",
+            lexeme: this.src.slice(start.offset, mantissaEnd.offset),
+            value: promoteInteger(acc, negative),
+            numKind: "integer",
+            span: { start, end: mantissaEnd },
+          });
+        }
         return;
       }
       // si no hay dígito y no hay signo: backtrack — la letra queda como identifier.

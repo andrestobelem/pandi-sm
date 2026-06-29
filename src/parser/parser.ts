@@ -472,7 +472,8 @@ class Parser {
     const open = this.advance(); // `#(`
     const elements: LiteralNode[] = [];
     while (this.peek().type !== "rparen" && !this.atEnd) {
-      elements.push(this.parseArrayElement());
+      const el = this.parseArrayElement();
+      if (el !== null) elements.push(el);
     }
     return this.closeArrayLiteral(open, "array", "rparen", elements, "E_UNCLOSED_ARRAY");
   }
@@ -480,7 +481,9 @@ class Parser {
   // Un elemento de literalArray: literal numérico/string/character; nil/true/false
   // reificados (R5); otros identifiers / keyword-runs / binarySelector => símbolo;
   // `#(`/`(` => array anidado; `#[` => byteArray anidado.
-  private parseArrayElement(): LiteralNode {
+  // Retorna null si el token es inesperado (E_UNEXPECTED_TOKEN) para que el llamador
+  // no inserte un nodo fantasma en el AST.
+  private parseArrayElement(): LiteralNode | null {
     const t = this.peek();
     switch (t.type) {
       case "number":
@@ -504,10 +507,10 @@ class Parser {
       case "keyword":
         return this.keywordRunSymbol();
       default: {
-        // Token inesperado donde se esperaba un elemento de array.
+        // Token inesperado: avanza, reporta error, retorna null para no insertar nodo fantasma.
         const bad = this.advance();
         this.error("E_UNEXPECTED_TOKEN", bad.span, `elemento de array inesperado: ${bad.type}`);
-        return this.symbolLiteral(bad);
+        return null;
       }
     }
   }
@@ -517,7 +520,8 @@ class Parser {
     const open = this.advance(); // `(`
     const elements: LiteralNode[] = [];
     while (this.peek().type !== "rparen" && !this.atEnd) {
-      elements.push(this.parseArrayElement());
+      const el = this.parseArrayElement();
+      if (el !== null) elements.push(el);
     }
     return this.closeArrayLiteral(open, "array", "rparen", elements, "E_UNCLOSED_ARRAY");
   }
@@ -565,7 +569,10 @@ class Parser {
       const t = this.peek();
       if (t.type === "number" && t.numKind === "integer") {
         this.advance();
-        if (typeof t.value === "number" && (t.value < 0 || t.value > 255)) {
+        if (
+          (typeof t.value === "number" || typeof t.value === "bigint") &&
+          (t.value < 0 || t.value > 255)
+        ) {
           this.error("E_BYTE_RANGE", t.span, `byte fuera de rango [0,255]: ${t.lexeme}`);
         }
         elements.push(this.numberLiteral(t));
