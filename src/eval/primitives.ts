@@ -202,6 +202,20 @@ const falseAnd: Primitive = (_r, _args) => false;
 const trueOr: Primitive = (_r, _args) => true;
 const falseOr: Primitive = (_r, args, u) => evalBranch(args[0], u);
 
+// ── L4 F1-ext (origin=ingeniería/dialecto, ver log L6) · & | xor: EAGER ──────
+// Primos NO-cortocircuito de and:/or: (ANSI/Pharo): el ARGUMENTO es un Boolean YA
+// evaluado (NO un bloque). Viven en True/False.methodDict (no se inlinean: un
+// no-Boolean cae a doesNotUnderstand:, GATE-L4-NO-INLINING). NOTA léxica: `|`
+// aislado lexea como verticalBar (R10), así que el envío de superficie `true | x`
+// no es parseable; el selector se instala igual y es alcanzable por send/perform.
+const trueAndEager: Primitive = (_r, args) => args[0] as boolean;
+const falseAndEager: Primitive = (_r, _args) => false;
+const trueOrEager: Primitive = (_r, _args) => true;
+const falseOrEager: Primitive = (_r, args) => args[0] as boolean;
+// a xor: b == (a ~= b). receptor true => !arg; receptor false => arg.
+const trueXor: Primitive = (_r, args) => !(args[0] as boolean);
+const falseXor: Primitive = (_r, args) => args[0] as boolean;
+
 // ─────────────────────────────────────────────────────────────────────────
 // L2-proper · protocolo <Object> (S3, plan §5.2 líneas 295-300). Los 23
 // selectores comunes a TODO objeto, instalados en Object.methodDict y por tanto
@@ -258,6 +272,23 @@ function objectIsNil(receiver: STValue, _args: STValue[], u: Universe): STValue 
 function objectNotNil(receiver: STValue, _args: STValue[], u: Universe): STValue {
   return receiver !== u.nil;
 }
+
+// ── L4 F1-ext (origin=ingeniería/dialecto, ver log L6) · familia ifNil:/ifNotNil:
+// Default en Object (receptor NO-nil) y override en UndefinedObject (receptor nil).
+// La rama NO tomada NUNCA se evalúa (cortocircuito por bloque, como ifTrue:). El
+// bloque se invoca con aridad 0 (la variante 1-arg de Pharo que recibe self se
+// difiere). nil ifNil: [b] => b; x ifNil: [b] => x. nil ifNotNil: [b] => nil;
+// x ifNotNil: [b] => b.
+const objectIfNil: Primitive = (receiver) => receiver; // no-nil: devuelve self
+const undefinedIfNil: Primitive = (_r, args, u) => evalBranch(args[0], u); // nil: corre el bloque
+const objectIfNotNil: Primitive = (_r, args, u) => evalBranch(args[0], u); // no-nil: corre el bloque
+const undefinedIfNotNil: Primitive = (_r, _args, u) => u.nil; // nil: devuelve nil
+// ifNil:ifNotNil: — no-nil corre arg[1]; nil corre arg[0].
+const objectIfNilIfNotNil: Primitive = (_r, args, u) => evalBranch(args[1], u);
+const undefinedIfNilIfNotNil: Primitive = (_r, args, u) => evalBranch(args[0], u);
+// ifNotNil:ifNil: — no-nil corre arg[0]; nil corre arg[1].
+const objectIfNotNilIfNil: Primitive = (_r, args, u) => evalBranch(args[0], u);
+const undefinedIfNotNilIfNil: Primitive = (_r, args, u) => evalBranch(args[1], u);
 
 /**
  * isMemberOf: — true sólo si la clase del receptor es EXACTAMENTE el argumento
@@ -496,6 +527,13 @@ export function installPrimitives(u: Universe): void {
   u.False.methodDict.set(u.symbols.intern("and:"), falseAnd);
   u.True.methodDict.set(u.symbols.intern("or:"), trueOr);
   u.False.methodDict.set(u.symbols.intern("or:"), falseOr);
+  // L4 F1-ext · & | xor: EAGER (no son bloques; viven en True/False, no se inlinean).
+  u.True.methodDict.set(u.symbols.intern("&"), trueAndEager);
+  u.False.methodDict.set(u.symbols.intern("&"), falseAndEager);
+  u.True.methodDict.set(u.symbols.intern("|"), trueOrEager);
+  u.False.methodDict.set(u.symbols.intern("|"), falseOrEager);
+  u.True.methodDict.set(u.symbols.intern("xor:"), trueXor);
+  u.False.methodDict.set(u.symbols.intern("xor:"), falseXor);
   // not se define en Boolean (compartido por True/False vía la superclass chain).
   u.Boolean.methodDict.set(u.symbols.intern("not"), booleanNot);
   u.Transcript_class.methodDict.set(u.symbols.intern("show:"), transcriptShow);
@@ -524,6 +562,16 @@ export function installPrimitives(u: Universe): void {
   u.Object.methodDict.set(u.symbols.intern("~="), objectNotEquals);
   u.Object.methodDict.set(u.symbols.intern("isNil"), objectIsNil);
   u.Object.methodDict.set(u.symbols.intern("notNil"), objectNotNil);
+  // L4 F1-ext · familia ifNil:/ifNotNil: — default en Object, override en
+  // UndefinedObject (el lookup halla el override de nil antes de subir a Object).
+  u.Object.methodDict.set(u.symbols.intern("ifNil:"), objectIfNil);
+  u.UndefinedObject.methodDict.set(u.symbols.intern("ifNil:"), undefinedIfNil);
+  u.Object.methodDict.set(u.symbols.intern("ifNotNil:"), objectIfNotNil);
+  u.UndefinedObject.methodDict.set(u.symbols.intern("ifNotNil:"), undefinedIfNotNil);
+  u.Object.methodDict.set(u.symbols.intern("ifNil:ifNotNil:"), objectIfNilIfNotNil);
+  u.UndefinedObject.methodDict.set(u.symbols.intern("ifNil:ifNotNil:"), undefinedIfNilIfNotNil);
+  u.Object.methodDict.set(u.symbols.intern("ifNotNil:ifNil:"), objectIfNotNilIfNil);
+  u.UndefinedObject.methodDict.set(u.symbols.intern("ifNotNil:ifNil:"), undefinedIfNotNilIfNil);
   u.Object.methodDict.set(u.symbols.intern("isMemberOf:"), objectIsMemberOf);
   u.Object.methodDict.set(u.symbols.intern("isKindOf:"), objectIsKindOf);
   u.Object.methodDict.set(u.symbols.intern("respondsTo:"), objectRespondsTo);
