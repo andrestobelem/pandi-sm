@@ -15,8 +15,14 @@
  * @kind    positive
  * @layer   L4
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { eval as evalSt, printString } from "../../src/eval/index.js";
+import { eval as evalSt, evalWith, printString } from "../../src/eval/index.js";
+import { COLLECTIONS_PROVENANCE } from "../../src/eval/kernel-collections.js";
+import { compiledMethodOf } from "../../src/eval/method.js";
+import type { STClass } from "../../src/runtime/index.js";
+import { lookupMethod } from "../../src/runtime/index.js";
 
 describe("L4 · F3 · S2 · do: (primitiva, itera elements)", () => {
   it("do: invoca el bloque por cada elemento (acumula efecto)", () => {
@@ -163,5 +169,58 @@ describe("L4 · F3 · S2 · regresión: literales/bucles intactos", () => {
       1 to: 5 do: [:i | sum := sum + i].
       sum`;
     expect(printString(evalSt(src))).toBe("15");
+  });
+});
+
+describe("L4 · F3/F4 · GATE-L4-PROVENANCE: tags de procedencia + log de desviaciones", () => {
+  // Espejo de f2-number.test.ts: cada método derivado .st porta su tag COLLECTIONS_PROVENANCE,
+  // y el log de desviaciones registra cada desviación esperada de L4 colecciones.
+
+  it("los métodos derivados de Collection portan COLLECTIONS_PROVENANCE", () => {
+    const { universe } = evalWith("nil");
+    const collection = universe.namespace.get("Collection") as STClass;
+    for (const selector of [
+      "isEmpty",
+      "notEmpty",
+      "includes:",
+      "inject:into:",
+      "detect:ifNone:",
+      "detect:",
+      "collect:",
+      "select:",
+      "reject:",
+    ]) {
+      const prim = lookupMethod(collection, universe.symbols.intern(selector));
+      expect(prim, `Collection>>${selector} debe estar instalado`).toBeDefined();
+      const meta = compiledMethodOf(prim as NonNullable<typeof prim>);
+      expect(meta?.provenanceTag, `tag de ${selector}`).toBe(COLLECTIONS_PROVENANCE);
+    }
+  });
+
+  it("los métodos derivados de SequenceableCollection portan COLLECTIONS_PROVENANCE", () => {
+    const { universe } = evalWith("nil");
+    const sequenceable = universe.namespace.get("SequenceableCollection") as STClass;
+    for (const selector of ["first", "last", ",", "copyFrom:to:"]) {
+      const prim = lookupMethod(sequenceable, universe.symbols.intern(selector));
+      expect(prim, `SequenceableCollection>>${selector} debe estar instalado`).toBeDefined();
+      const meta = compiledMethodOf(prim as NonNullable<typeof prim>);
+      expect(meta?.provenanceTag, `tag de ${selector}`).toBe(COLLECTIONS_PROVENANCE);
+    }
+    // el tag declara su origen (origin=ingenieria/dialecto: species/1-based no son ANSI core).
+    expect(COLLECTIONS_PROVENANCE).toMatch(/origin=/);
+  });
+
+  it("el log de desviaciones registra cada desviación esperada de L4 colecciones (DEV-032..DEV-035)", () => {
+    const logPath = fileURLToPath(
+      new URL("../../doc/research/log-de-desviaciones.md", import.meta.url),
+    );
+    const log = readFileSync(logPath, "utf8");
+    // (DEV-032) species=Array; (DEV-033) 1-based at:/at:put:; (DEV-034) {}/#( )/#[ ] -> Array;
+    // (DEV-035) Interval sólo de enteros seguros (paso/extremo no entero o bigint inseguro señala).
+    for (const dev of ["DEV-032", "DEV-033", "DEV-034", "DEV-035"]) {
+      expect(log, `${dev} debe existir en el log`).toContain(`| ${dev} |`);
+    }
+    // DEV-025 (raíz instSize) debe estar transicionada a "implementada (raíz cerrada)".
+    expect(log).toContain("implementada (raíz cerrada)");
   });
 });

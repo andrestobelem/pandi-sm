@@ -138,6 +138,42 @@ describe("L4 · F4 · S3 · GATE-F4-SEQUENCEABLE negativos (at: fuera de rango)"
   });
 });
 
+describe("L4 · F4 · S3 · Interval mal formado FALLA RUIDOSO, nunca miscomputa en silencio", () => {
+  // Ronda de reparación: un paso/extremo no soportado caía a Number()=>NaN (paso Float) o
+  // colapsaba la precisión (extremo bigint > 2^53-1), dando un Interval silenciosamente
+  // erróneo (size 0 / size 1) y, en el caso bigint, un bucle de impresión sin fin. El MVP
+  // sólo soporta Intervals de enteros seguros; lo demás se DIFIERE señalando un Error
+  // capturable por on:do:, NO se miscomputa.
+
+  it("paso Float (1 to: 2 by: 0.5) señala un Error capturable (no Interval vacío silencioso)", () => {
+    const src = `[ (1 to: 2 by: 0.5) size ] on: Error do: [:e | #pasoNoEntero ]`;
+    expect(printString(evalSt(src))).toBe("#pasoNoEntero");
+  });
+
+  it("extremo Float (1 to: 2.5) señala un Error capturable", () => {
+    const src = `[ (1 to: 2.5) size ] on: Error do: [:e | #finNoEntero ]`;
+    expect(printString(evalSt(src))).toBe("#finNoEntero");
+  });
+
+  it("extremo bigint fuera del rango seguro señala un Error capturable (no colapsa la precisión)", () => {
+    const src = `[ (1000000000000000000000 to: 1000000000000000000002) size ] on: Error do: [:e | #bigUnsafe ]`;
+    expect(printString(evalSt(src))).toBe("#bigUnsafe");
+  });
+
+  it("printString de un Interval bigint mal formado NO cuelga: señala antes de imprimir", () => {
+    const src = `[ (1000000000000000000000 to: 1000000000000000000002) printString ] on: Error do: [:e | #bigPrint ]`;
+    expect(printString(evalSt(src))).toBe("#bigPrint");
+  });
+
+  it("un Interval con bigint dentro del rango seguro SÍ funciona (no es un rechazo ciego)", () => {
+    // 10^15 cabe en 2^53-1 (~9.007e15): debe construir y computar correctamente.
+    expect(printString(evalSt("(1000000000000000 to: 1000000000000002) size"))).toBe("3");
+    expect(printString(evalSt("(1000000000000000 to: 1000000000000002) last"))).toBe(
+      "1000000000000002",
+    );
+  });
+});
+
 describe("L4 · F4 · S3 · REGRESIÓN: to:do: con bloque literal sigue iterando", () => {
   it("(1 to: 5 do: [:i | ...]) literal block sigue siendo special-form (suma 15)", () => {
     const src = `

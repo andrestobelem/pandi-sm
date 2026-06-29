@@ -45,10 +45,15 @@ export function printString(value: STValue): string {
   // entre paréntesis, separados por espacio (vacío => "()"). ANTES del default "an Interval".
   if (isInterval(value)) {
     const terms: string[] = [];
-    if (value.by !== 0) {
-      for (let v = value.from; value.by > 0 ? v <= value.to : v >= value.to; v += value.by) {
-        terms.push(printString(v));
-      }
+    // Iteramos por la CANTIDAD de términos (espejo de intervalLength en primitives.ts), NO
+    // por `v += by` con condición `v <= to`. Razón (DRIFT-L4): si `by` fuera 0 o sub-ulp
+    // (p.ej. un extremo enorme donde `v + by === v` en double), el bucle por suma NUNCA
+    // avanzaría y empujaría términos sin fin (RangeError "Invalid array length"). Contar los
+    // términos primero acota el bucle SIEMPRE; un `by` 0/NaN da count 0 (Interval vacío).
+    const span = value.to - value.from;
+    const count = value.by !== 0 ? Math.floor(span / value.by) + 1 : 0;
+    for (let k = 0; k < count; k++) {
+      terms.push(printString(value.from + k * value.by));
     }
     return `(${terms.join(" ")})`;
   }

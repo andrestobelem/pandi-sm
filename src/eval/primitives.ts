@@ -295,21 +295,51 @@ function intervalDo(receiver: STValue, args: STValue[], u: Universe): STValue {
 }
 
 /**
+ * Coerce un extremo/paso de Interval (receptor `to:`/arg) a un entero JS seguro, o SEÑALA
+ * RUIDOSAMENTE. El STInterval guarda `from`/`to`/`by` como `number` (double): convertirlos
+ * a ciegas con Number() esconde DOS trampas silenciosas (DRIFT-L4):
+ *   (a) un Float boxed (p.ej. `0.5`) NO es number|bigint => Number(STFloat)===NaN, y el
+ *       Interval colapsa a vacío (size 0) sin avisar. Un paso/extremo no entero NO está
+ *       soportado en el MVP (Interval de enteros, §5.4); se DIFIERE en voz alta.
+ *   (b) un bigint fuera de 2^53-1 colapsa su precisión con Number() (p.ej. 10^21+2 -> 10^21),
+ *       dando size/at:/last erróneos Y un bucle de impresión que no avanza (1e21+1===1e21).
+ * En ambos casos señalamos un Error genérico capturable (mismo enrutado L5 que at: fuera de
+ * rango), en vez de miscomputar en silencio. `label` identifica el operando en el mensaje.
+ */
+function intervalEndpoint(v: STValue, label: string, u: Universe): number {
+  if (isFloat(v)) {
+    signalError(`Interval con ${label} no entero (${hostPrintString(v)}) no soportado (MVP)`, u);
+  }
+  if (typeof v === "bigint") {
+    if (v < -9007199254740991n || v > 9007199254740991n) {
+      signalError(
+        `Interval con ${label} fuera del rango seguro (${v.toString()}) no soportado (MVP)`,
+        u,
+      );
+    }
+    return Number(v);
+  }
+  if (typeof v === "number") return v;
+  // Cualquier otro STValue (Character, String, nil, …) no es un extremo numérico válido.
+  signalError(`Interval con ${label} no numérico no soportado (MVP)`, u);
+}
+
+/**
  * SmallInteger>>to: stop — construye un Interval (from=self, to=stop, by=1). NO es el
  * special-form de bucle (ése es `to:do:` con bloque literal, reconocido en eval.ts ANTES
  * del envío). Un `(1 to: 5)` sin `do:` reifica el Interval; el caller decide qué hacer.
  */
 function smallIntegerTo(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const from = Number(receiver as number | bigint);
-  const to = Number(args[0] as number | bigint);
+  const from = intervalEndpoint(receiver, "inicio", u);
+  const to = intervalEndpoint(args[0] as STValue, "fin", u);
   return makeInterval(from, to, 1, u);
 }
 
 /** SmallInteger>>to:by: stop step — Interval con paso explícito (from=self, to=stop, by=step). */
 function smallIntegerToBy(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const from = Number(receiver as number | bigint);
-  const to = Number(args[0] as number | bigint);
-  const by = Number(args[1] as number | bigint);
+  const from = intervalEndpoint(receiver, "inicio", u);
+  const to = intervalEndpoint(args[0] as STValue, "fin", u);
+  const by = intervalEndpoint(args[1] as STValue, "paso", u);
   return makeInterval(from, to, by, u);
 }
 
