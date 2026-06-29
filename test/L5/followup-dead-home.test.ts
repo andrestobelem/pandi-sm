@@ -18,7 +18,7 @@ import { loadKernelSources } from "../../src/eval/kernel-loader.js";
 import { defineMethod } from "../../src/eval/method.js";
 import { installPrimitives } from "../../src/eval/primitives.js";
 import { send } from "../../src/eval/send.js";
-import { basicNew, bootstrapKernel, type STClass, type STValue } from "../../src/runtime/index.js";
+import { basicNew, bootstrapKernel, type STClass } from "../../src/runtime/index.js";
 
 /** Universo con primitivas Y jerarquía L5 cargada (mismo bootstrap que evalWith). */
 function fullUniverse() {
