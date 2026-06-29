@@ -48,8 +48,36 @@ function anyFloat(a: STValue, b: STValue): boolean {
   return isFloat(a) || isFloat(b);
 }
 
+/**
+ * ¿`v` es un operando numérico válido (number|bigint nativo o Float boxed)? Único punto
+ * de verdad para la validación de operandos de la torre numérica. Un Character boxed, un
+ * String, nil o cualquier otro STObject NO es numérico: pasarlo a BigInt()/Number() daría
+ * un TypeError de host INCAPTURABLE (lado entero) o un NaN silenciosamente erróneo (lado
+ * Float). Ver guardNumericOperand.
+ */
+function isNumericOperand(v: STValue): boolean {
+  return typeof v === "number" || typeof v === "bigint" || isFloat(v);
+}
+
+/**
+ * Valida el arg de una primitiva ARITMÉTICA/COMPARACIÓN-ORDENADA (+ - * / < > <= >=): si
+ * no es numérico, SEÑALA un doesNotUnderstand: de nivel-Smalltalk (capturable por on:do:),
+ * en vez de reventar el host con BigInt(STObject)/Number(STObject)=>NaN. El selector se
+ * reporta sobre la clase del RECEPTOR (es el receptor quien no sabe coercir el arg ajeno).
+ * Devuelve true si el operando es válido; si no, NO retorna (signal desenrolla/lanza).
+ * NOTA: la IGUALDAD (=/~=) NO usa esto — un no-número simplemente NO es igual (=> false),
+ * nunca un error (semántica ANSI Object>>=).
+ */
+function guardNumericOperand(receiver: STValue, arg: STValue, selector: string, u: Universe): true {
+  if (isNumericOperand(arg)) return true;
+  signalMessageNotUnderstood(classOf(receiver, u).name, selector, u);
+  // signalMessageNotUnderstood no retorna por la ruta normal (señala/desenrolla).
+  throw new Error(`${selector}: operando no numérico (sin handler)`);
+}
+
 /** Suma SmallInteger. Mixto con Float => Float; HOOK BigInt en overflow entero. */
 function smallIntegerPlus(receiver: STValue, args: STValue[], u: Universe): STValue {
+  guardNumericOperand(receiver, args[0] as STValue, "+", u);
   if (anyFloat(receiver, args[0] as STValue)) {
     return makeFloat(asJsNumber(receiver) + asJsNumber(args[0] as STValue), u);
   }
@@ -63,6 +91,7 @@ function smallIntegerPlus(receiver: STValue, args: STValue[], u: Universe): STVa
 
 /** Resta SmallInteger. Mixto con Float => Float; mismo HOOK BigInt que la suma. */
 function smallIntegerMinus(receiver: STValue, args: STValue[], u: Universe): STValue {
+  guardNumericOperand(receiver, args[0] as STValue, "-", u);
   if (anyFloat(receiver, args[0] as STValue)) {
     return makeFloat(asJsNumber(receiver) - asJsNumber(args[0] as STValue), u);
   }
@@ -76,6 +105,7 @@ function smallIntegerMinus(receiver: STValue, args: STValue[], u: Universe): STV
 
 /** Multiplica SmallInteger. Mixto con Float => Float; mismo HOOK de promoción. */
 function smallIntegerTimes(receiver: STValue, args: STValue[], u: Universe): STValue {
+  guardNumericOperand(receiver, args[0] as STValue, "*", u);
   if (anyFloat(receiver, args[0] as STValue)) {
     return makeFloat(asJsNumber(receiver) * asJsNumber(args[0] as STValue), u);
   }
@@ -117,6 +147,7 @@ function signalZeroDivide(u: Universe): never {
  */
 function smallIntegerDivide(receiver: STValue, args: STValue[], u: Universe): STValue {
   const b = args[0] as STValue;
+  guardNumericOperand(receiver, b, "/", u);
   if (isZeroDivisor(b)) signalZeroDivide(u);
   if (anyFloat(receiver, b)) return makeFloat(asJsNumber(receiver) / asJsNumber(b), u);
   const ai = BigInt(receiver as number | bigint);
@@ -150,18 +181,26 @@ function smallIntegerNegated(receiver: STValue): STValue {
 // El receptor es siempre un STFloat; el arg puede ser Float o SmallInteger (se coerce
 // con asJsNumber). Aritmética => Float boxed; comparación => Boolean nativo.
 
-function floatBinary(op: (a: number, b: number) => number): Primitive {
-  return (receiver, args, u) =>
-    makeFloat(op(asJsNumber(receiver), asJsNumber(args[0] as STValue)), u);
+function floatBinary(selector: string, op: (a: number, b: number) => number): Primitive {
+  return (receiver, args, u) => {
+    const b = args[0] as STValue;
+    guardNumericOperand(receiver, b, selector, u);
+    return makeFloat(op(asJsNumber(receiver), asJsNumber(b)), u);
+  };
 }
 
-function floatCompare(op: (a: number, b: number) => boolean): Primitive {
-  return (receiver, args) => op(asJsNumber(receiver), asJsNumber(args[0] as STValue));
+function floatCompare(selector: string, op: (a: number, b: number) => boolean): Primitive {
+  return (receiver, args, u) => {
+    const b = args[0] as STValue;
+    guardNumericOperand(receiver, b, selector, u);
+    return op(asJsNumber(receiver), asJsNumber(b));
+  };
 }
 
 /** Float>>/ — divisor 0 => ZeroDivide (NO Infinity); si no, división Float. */
 function floatDivide(receiver: STValue, args: STValue[], u: Universe): STValue {
   const b = args[0] as STValue;
+  guardNumericOperand(receiver, b, "/", u);
   if (isZeroDivisor(b)) signalZeroDivide(u);
   return makeFloat(asJsNumber(receiver) / asJsNumber(b), u);
 }
@@ -198,12 +237,17 @@ function smallIntegerAsCharacter(receiver: STValue, _args: STValue[], u: Univers
   return makeCharacter(Number(receiver as number | bigint), u);
 }
 
-function characterCompare(op: (a: number, b: number) => boolean): Primitive {
-  return (receiver, args) => {
+function characterCompare(selector: string, op: (a: number, b: number) => boolean): Primitive {
+  return (receiver, args, u) => {
     const b = args[0] as STValue;
     // Un Float boxed es un STObject: Number(<STObject>) daría NaN y TODA comparación
     // contra NaN sería false (un valor silenciosamente erróneo). Derivamos el double del
-    // campo dedicado vía isFloat ANTES de caer al Number() de un SmallInteger nativo.
+    // campo dedicado vía isFloat/isCharacter ANTES de caer al Number() de un entero nativo.
+    // Un arg ni numérico ni Character (nil/String/...) NO puede compararse por code point:
+    // señalamos un dNU capturable (mismo principio que el lado entero/Float) en vez de NaN.
+    if (!isCharacter(b) && !isNumericOperand(b)) {
+      guardNumericOperand(receiver, b, selector, u);
+    }
     const bcp = isFloat(b)
       ? b.floatValue
       : isCharacter(b)
@@ -343,20 +387,34 @@ function describeReceiver(receiver: STValue, u: Universe): string {
  * Comparaciones de SmallInteger (< > <= >= = ~=). Devuelven booleanos nativos JS
  * (classOf los mapea a True/False). number|bigint comparan numéricamente entre sí;
  * BigInt(a) <op> BigInt(b) cuando alguno es bigint, evitando coerción a number.
+ *
+ * VALIDACIÓN DE OPERANDO (ronda 2): un arg no-numérico revienta BigInt(STObject) con un
+ * TypeError de host INCAPTURABLE. Para las comparaciones ORDENADAS (selector !== "=" y
+ * "~=") señalamos un dNU capturable por on:do: vía guardNumericOperand. Para la IGUALDAD
+ * (=/~=) un no-número NO es igual (semántica ANSI Object>>=): "=" => false, "~=" => true,
+ * NUNCA un error.
  */
 function compareSmallInteger(
+  selector: string,
   op: (a: bigint, b: bigint) => boolean,
   fop: (a: number, b: number) => boolean,
 ): Primitive {
-  return (receiver: STValue, args: STValue[]): STValue => {
+  const isEquality = selector === "=" || selector === "~=";
+  return (receiver: STValue, args: STValue[], u: Universe): STValue => {
+    const b = args[0] as STValue;
+    if (!isNumericOperand(b)) {
+      // Igualdad con no-número => false/true; comparación ordenada => dNU capturable.
+      if (isEquality) return selector === "~=";
+      guardNumericOperand(receiver, b, selector, u);
+    }
     // L4 F2 · mixto con Float: compara como double (la presencia de un Float promueve
     // la comparación a Float; el resultado es Boolean nativo, NO se boxea).
-    if (isFloat(args[0] as STValue)) {
-      return fop(Number(receiver as number | bigint), (args[0] as STFloat).floatValue);
+    if (isFloat(b)) {
+      return fop(Number(receiver as number | bigint), (b as STFloat).floatValue);
     }
     // BigInt en ambos lados: compara number y bigint correctamente sin coerción
     // lossy a number (un SmallInteger puede ser bigint tras promoción por overflow).
-    return op(BigInt(receiver as number | bigint), BigInt(args[0] as number | bigint));
+    return op(BigInt(receiver as number | bigint), BigInt(b as number | bigint));
   };
 }
 
@@ -689,6 +747,7 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(
     u.symbols.intern("<"),
     compareSmallInteger(
+      "<",
       (a, b) => a < b,
       (a, b) => a < b,
     ),
@@ -696,6 +755,7 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(
     u.symbols.intern(">"),
     compareSmallInteger(
+      ">",
       (a, b) => a > b,
       (a, b) => a > b,
     ),
@@ -703,6 +763,7 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(
     u.symbols.intern("<="),
     compareSmallInteger(
+      "<=",
       (a, b) => a <= b,
       (a, b) => a <= b,
     ),
@@ -710,6 +771,7 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(
     u.symbols.intern(">="),
     compareSmallInteger(
+      ">=",
       (a, b) => a >= b,
       (a, b) => a >= b,
     ),
@@ -717,6 +779,7 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(
     u.symbols.intern("="),
     compareSmallInteger(
+      "=",
       (a, b) => a === b,
       (a, b) => a === b,
     ),
@@ -724,6 +787,7 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(
     u.symbols.intern("~="),
     compareSmallInteger(
+      "~=",
       (a, b) => a !== b,
       (a, b) => a !== b,
     ),
@@ -731,34 +795,34 @@ export function installPrimitives(u: Universe): void {
   // ── L4 F2 · Float (boxed) · aritmética + comparación + abs/negated ──────────
   u.Float.methodDict.set(
     u.symbols.intern("+"),
-    floatBinary((a, b) => a + b),
+    floatBinary("+", (a, b) => a + b),
   );
   u.Float.methodDict.set(
     u.symbols.intern("-"),
-    floatBinary((a, b) => a - b),
+    floatBinary("-", (a, b) => a - b),
   );
   u.Float.methodDict.set(
     u.symbols.intern("*"),
-    floatBinary((a, b) => a * b),
+    floatBinary("*", (a, b) => a * b),
   );
   u.Float.methodDict.set(u.symbols.intern("/"), floatDivide);
   u.Float.methodDict.set(u.symbols.intern("abs"), floatAbs);
   u.Float.methodDict.set(u.symbols.intern("negated"), floatNegated);
   u.Float.methodDict.set(
     u.symbols.intern("<"),
-    floatCompare((a, b) => a < b),
+    floatCompare("<", (a, b) => a < b),
   );
   u.Float.methodDict.set(
     u.symbols.intern(">"),
-    floatCompare((a, b) => a > b),
+    floatCompare(">", (a, b) => a > b),
   );
   u.Float.methodDict.set(
     u.symbols.intern("<="),
-    floatCompare((a, b) => a <= b),
+    floatCompare("<=", (a, b) => a <= b),
   );
   u.Float.methodDict.set(
     u.symbols.intern(">="),
-    floatCompare((a, b) => a >= b),
+    floatCompare(">=", (a, b) => a >= b),
   );
   u.Float.methodDict.set(u.symbols.intern("="), floatEquals);
   u.Float.methodDict.set(u.symbols.intern("~="), floatNotEquals);
@@ -769,19 +833,19 @@ export function installPrimitives(u: Universe): void {
   u.Character.methodDict.set(u.symbols.intern("asCharacter"), characterAsCharacter);
   u.Character.methodDict.set(
     u.symbols.intern("<"),
-    characterCompare((a, b) => a < b),
+    characterCompare("<", (a, b) => a < b),
   );
   u.Character.methodDict.set(
     u.symbols.intern(">"),
-    characterCompare((a, b) => a > b),
+    characterCompare(">", (a, b) => a > b),
   );
   u.Character.methodDict.set(
     u.symbols.intern("<="),
-    characterCompare((a, b) => a <= b),
+    characterCompare("<=", (a, b) => a <= b),
   );
   u.Character.methodDict.set(
     u.symbols.intern(">="),
-    characterCompare((a, b) => a >= b),
+    characterCompare(">=", (a, b) => a >= b),
   );
   u.Character.methodDict.set(u.symbols.intern("="), characterEquals);
   u.Character.methodDict.set(u.symbols.intern("~="), characterNotEquals);

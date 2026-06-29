@@ -216,3 +216,45 @@ describe("L4 · F2 · GATE-L4-PROVENANCE · tag de procedencia + log de desviaci
     }
   });
 });
+
+describe("L4 · F2 · operando no-numérico: error de Smalltalk, NUNCA NaN ni TypeError de host", () => {
+  // REGRESIÓN (ronda 2): un operando no-numérico (Character/nil/String) en una
+  // primitiva numérica caía a Number(STObject)=>NaN (lado Float, silenciosamente
+  // erróneo) o a BigInt(STObject)=>TypeError de host INCAPTURABLE (lado entero).
+  // La aritmética y la comparación ordenada deben SEÑALAR un error de nivel-Smalltalk
+  // capturable por on:do:; la igualdad (=/~=) debe devolver false/true (nunca error).
+
+  // ── Lado Float (receptor Float, arg no-numérico): trichotomy + aritmética ──
+  it("3.0 < $a / 3.0 > $a señalan un error capturable (NO devuelven false silencioso)", () => {
+    expect(() => evalSt("3.0 < $a")).toThrow();
+    expect(() => evalSt("3.0 > $a")).toThrow();
+    expect(printString(evalSt("[3.0 < $a] on: Error do: [:e | 111]"))).toBe("111");
+    expect(printString(evalSt("[3.0 > $a] on: Error do: [:e | 222]"))).toBe("222");
+  });
+
+  it("3.0 + $a señala un error capturable (NO produce un Float NaN)", () => {
+    expect(() => evalSt("3.0 + $a")).toThrow();
+    expect(printString(evalSt("[3.0 + $a] on: Error do: [:e | 333]"))).toBe("333");
+  });
+
+  it("3.0 = $a => false (igualdad con no-Float es false, NUNCA error ni NaN)", () => {
+    expect(printString(evalSt("3.0 = $a"))).toBe("false");
+    expect(printString(evalSt("3.0 ~= $a"))).toBe("true");
+  });
+
+  // ── Lado entero (receptor SmallInteger, arg no-numérico) ──
+  it("3 < nil / 3 + $a señalan un error CAPTURABLE por on:do: (NO TypeError de host)", () => {
+    expect(() => evalSt("3 < nil")).toThrow();
+    expect(() => evalSt("3 + $a")).toThrow();
+    expect(printString(evalSt("[3 < nil] on: Error do: [:e | 444]"))).toBe("444");
+    expect(printString(evalSt("[3 + $a] on: Error do: [:e | 555]"))).toBe("555");
+    expect(printString(evalSt("[3 / $a] on: Error do: [:e | 666]"))).toBe("666");
+  });
+
+  it("3 = nil / 3 = $a / 3 = 'abc' => false (igualdad con no-número, NUNCA error)", () => {
+    expect(printString(evalSt("3 = nil"))).toBe("false");
+    expect(printString(evalSt("3 = $a"))).toBe("false");
+    expect(printString(evalSt("3 = 'abc'"))).toBe("false");
+    expect(printString(evalSt("3 ~= nil"))).toBe("true");
+  });
+});
