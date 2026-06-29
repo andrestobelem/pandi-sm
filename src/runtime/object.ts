@@ -50,6 +50,52 @@ export class NonLocalReturn {
 }
 
 /**
+ * SignalException — objeto de control-flow de L5 (plan §5.5/§5.5.1 B, V8-2): un
+ * envoltorio JS PLANO (NO extends Error, igual que NonLocalReturn) de la instancia
+ * Smalltalk de excepción. Se CONSTRUYE en signal(); rara vez se lanza (el handler
+ * corre sobre el frame vivo del signal, fase 1). messageText vive en el envoltorio
+ * para esquivar el drift de instSize-no-acumulativo (S2 lo cablea). En S1 sólo
+ * declaramos la forma para que el unwind compartido la tipe sin acoplar.
+ */
+export class SignalException {
+  messageText?: STValue;
+  constructor(readonly st: STObject) {}
+}
+
+/**
+ * Unwind — objeto de control-flow de la FASE 2 de L5 (plan §5.5.1 G, V8-2): un
+ * objeto JS PLANO (NO extends Error) que return:/retry/retryUsing:/fallOff lanzan
+ * para abandonar el frame del signal hacia su on:do:. Mismo patrón de identidad
+ * por marcador que NonLocalReturn (marker capturado por el frame de on:do:).
+ * unwindTo() (compartida L3↔L5) lo propaga corriendo los ensure:/ifCurtailed:
+ * intermedios en orden inverso. En S1 sólo lo declaramos (on:do:/signal son S2+).
+ */
+export class Unwind {
+  constructor(
+    readonly marker: HomeMarker,
+    readonly value: STValue,
+    readonly curtailed: boolean,
+    readonly retry = false,
+    readonly retryBlock: STValue | null = null,
+  ) {}
+}
+
+/**
+ * HandlerContext — entrada de la handlerStack del heap (plan §5.5.1 §523/G). Un
+ * on:do: empuja uno por handler; signal() la recorre de tope a base buscando el
+ * primer `active` cuyo exceptionClass `handles:` la excepción. `active=false`
+ * mientras su handlerBlock corre (deshabilitado durante su propio block, Pharo).
+ * En S1 sólo declaramos la forma + la pila vacía en el Universe (la usa S2).
+ */
+export interface HandlerContext {
+  exceptionClass: STValue;
+  handlerBlock: STValue;
+  protectedBlock: STValue;
+  marker: HomeMarker;
+  active: boolean;
+}
+
+/**
  * Message — reificación MÍNIMA de un envío no entendido (plan §5.3 / L5 dNU): el
  * selector ausente y los argumentos, que Object>>doesNotUnderstand: recibe. El
  * MessageNotUnderstood completo (Exception navegable) es L5; aquí basta lo
@@ -128,6 +174,11 @@ export interface Universe {
   nil: STObject; // instancia única de UndefinedObject
   Transcript: STObject; // instancia única; su 'show:' (L3) acumula en un buffer
   symbols: SymbolTable;
+  // Pila de handlers en el HEAP (plan §5.5.1 B/G), independiente de la pila JS:
+  // on:do: empuja, su finally hace pop, signal() la recorre. Sembrada a [] por
+  // bootstrapKernel (NO un global de módulo: hay un Universe fresco por evalWith).
+  // En S1 sólo es scaffolding (ensure:/ifCurtailed: no la tocan); S2 la consume.
+  handlerStack: HandlerContext[];
   // Namespace mutable de globals de clase (única fuente de verdad, KERNELLOAD
   // §5.4.0): sembrado con el núcleo por bootstrapKernel; subclass: registra aquí
   // cada clase nueva; lookupGlobal lo consulta para resolver nombres de clase.

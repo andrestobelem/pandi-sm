@@ -90,6 +90,47 @@ function timesRepeat(receiver: STValue, args: STValue[], u: Universe): STValue {
 }
 
 /**
+ * BlockClosure>>ensure: (L5 S1, plan §5.5 #14/#15/#16; §5.5.1 D) — terminación
+ * GARANTIZADA: corre el bloque protegido (receptor) y, pase lo que pase, corre el
+ * bloque de cierre. El `finally` de JS dispara en retorno normal, en un throw de
+ * host (dNU), en un NonLocalReturn de L3 (`^`) y en un Unwind de L5 (PROBE1): una
+ * sola maquinaria de unwind compartida L3↔L5. El valor de la expresión es el del
+ * protegido (NO el del cierre). El orden inverso de ensure: anidados cae solo del
+ * anidamiento de los try/finally (el más interno corre primero).
+ * NOTA S1: un `resume:` exitoso (S2) NO cruza este frame hacia afuera, así que NO
+ * dispara el cierre — correcto y deseado (§5.5.1 I-3); se cablea con on:do: en S2.
+ */
+function blockEnsure(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const protectedBlock = receiver as STClosure;
+  const ensureBlock = args[0] as STClosure;
+  try {
+    return evalBlock(protectedBlock, [], u);
+  } finally {
+    evalBlock(ensureBlock, [], u);
+  }
+}
+
+/**
+ * BlockClosure>>ifCurtailed: (L5 S1, plan §5.5 #17/#18; §5.5.1 D) — corre el
+ * bloque de cierre SÓLO si el protegido termina de forma ANORMAL (un throw que
+ * cruza el frame: dNU de host, NonLocalReturn de L3, o Unwind de L5). En retorno
+ * normal el cierre NO corre (a diferencia de ensure:). Lo implementamos con
+ * try/catch: si el protegido lanza, corremos el cierre y RELANZAMOS el mismo
+ * objeto de control-flow (no lo tragamos). El orden inverso de ifCurtailed:
+ * anidados cae del anidamiento de los try/catch (el más interno corre primero).
+ */
+function blockIfCurtailed(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const protectedBlock = receiver as STClosure;
+  const curtailedBlock = args[0] as STClosure;
+  try {
+    return evalBlock(protectedBlock, [], u);
+  } catch (e) {
+    evalBlock(curtailedBlock, [], u);
+    throw e;
+  }
+}
+
+/**
  * Object>>doesNotUnderstand: — acción por defecto de un envío no entendido (S3).
  * send() llega aquí con un Message reificado (selector + args). Lanzamos un Error
  * de host OBSERVABLE y DETERMINISTA que nombra la clase del receptor y el selector;
@@ -458,6 +499,11 @@ export function installPrimitives(u: Universe): void {
   u.BlockClosure.methodDict.set(u.symbols.intern("value:"), blockValue);
   u.BlockClosure.methodDict.set(u.symbols.intern("value:value:"), blockValue);
   u.BlockClosure.methodDict.set(u.symbols.intern("value:value:value:"), blockValue);
+  // ── L5 S1 · terminación garantizada (plan §5.5): ensure:/ifCurtailed: como
+  // primitivas TS (necesitan el try/finally del frame JS y callBlock). Su
+  // contrato observable se cierra AQUÍ, no en L3 (corrección de solapamiento).
+  u.BlockClosure.methodDict.set(u.symbols.intern("ensure:"), blockEnsure);
+  u.BlockClosure.methodDict.set(u.symbols.intern("ifCurtailed:"), blockIfCurtailed);
   // ── Protocolo <Object> (S3): los 23 selectores comunes a todo objeto ──────
   // Object>>doesNotUnderstand: — raíz de la cadena; send() la invoca en todo miss.
   u.Object.methodDict.set(u.symbols.intern("doesNotUnderstand:"), doesNotUnderstand);

@@ -214,6 +214,9 @@ export function bootstrapKernel(): Universe {
     nil,
     Transcript,
     symbols,
+    // Pila de handlers vacía por Universe (plan §5.5.1): S1 sólo la siembra como
+    // scaffolding; ensure:/ifCurtailed: aún no la tocan, on:do:/signal (S2) sí.
+    handlerStack: [],
     namespace,
   };
 }

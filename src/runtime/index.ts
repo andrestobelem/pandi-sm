@@ -6,6 +6,7 @@ export { bootstrapKernel, makeClassWithMetaclass } from "./kernel.js";
 export {
   basicNew,
   classOf,
+  type HandlerContext,
   type HomeMarker,
   identical,
   identityHash,
@@ -18,10 +19,12 @@ export {
   ObjectFormat,
   type Primitive,
   type Scope,
+  SignalException,
   type STClass,
   type STClosure,
   type STObject,
   type STValue,
   type Universe,
+  Unwind,
 } from "./object.js";
 export { type STSymbol, type SymbolId, SymbolTable } from "./symbol-table.js";
