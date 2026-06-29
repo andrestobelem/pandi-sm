@@ -308,16 +308,18 @@ describe("L2 · <Object> · copy (shallow, decisión de dialecto), error:", () =
 describe("L2 · <Object> · printString (send) concuerda con el bridge host print.ts", () => {
   it("printString(send) === printString(host) para nil, inmediatos y un STObject", () => {
     const u = kernel();
+    // El SEND devuelve ahora un String BOXED (capa de valor de usuario, GATE-L4-IDENTITY):
+    // lo desenvolvemos con el bridge host printString(...) para comparar el TEXTO con ===.
     // nil
-    expect(send(u.nil, "printString", [], u)).toBe(printString(u.nil));
+    expect(printString(send(u.nil, "printString", [], u))).toBe(printString(u.nil));
     // SmallInteger inmediato
-    expect(send(3, "printString", [], u)).toBe(printString(3));
-    expect(send(3, "printString", [], u)).toBe("3");
+    expect(printString(send(3, "printString", [], u))).toBe(printString(3));
+    expect(printString(send(3, "printString", [], u))).toBe("3");
     // String inmediato
-    expect(send("hi", "printString", [], u)).toBe(printString("hi"));
+    expect(printString(send("hi", "printString", [], u))).toBe(printString("hi"));
     // STObject default: "a ClassName"
     const obj = basicNew(u.Object, u);
-    expect(send(obj, "printString", [], u)).toBe(printString(obj));
-    expect(send(obj, "printString", [], u)).toBe("a Object");
+    expect(printString(send(obj, "printString", [], u))).toBe(printString(obj));
+    expect(printString(send(obj, "printString", [], u))).toBe("a Object");
   });
 });

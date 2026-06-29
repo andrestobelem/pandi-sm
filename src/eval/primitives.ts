@@ -1134,8 +1134,13 @@ function objectError(_receiver: STValue, args: STValue[]): STValue {
  * send y la función host CONCUERDEN (el harness compara con === la salida host).
  * print.ts NO se elimina: es la fuente única de verdad de la representación.
  */
-function objectPrintString(receiver: STValue): STValue {
-  return hostPrintString(receiver);
+function objectPrintString(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  // El SEND debe devolver un String boxed (capa de valor de usuario), no un string JS
+  // nativo: de lo contrario `x printString == y printString` compararía por valor (hueco
+  // de identidad, GATE-L4-IDENTITY) y `(3 printString) asSymbol` internaría '' (textOf de
+  // un nativo es null). hostPrintString sigue siendo la fuente única de la representación;
+  // sólo BOXEAMOS su salida al cruzar a la capa de usuario.
+  return makeString(hostPrintString(receiver), u);
 }
 
 /**
