@@ -25,9 +25,9 @@ describe("L6.F · parseDeviationLog · real deviation log", () => {
     expect(entries.length).toBeGreaterThanOrEqual(10);
   });
 
-  it("parses exactly 61 entries from the real log", () => {
+  it("parses exactly 62 entries from the real log", () => {
     const entries = parseDeviationLog(REAL_LOG);
-    expect(entries.length).toBe(61);
+    expect(entries.length).toBe(62);
   });
 
   it("first entry has id DEV-001", () => {
@@ -35,9 +35,9 @@ describe("L6.F · parseDeviationLog · real deviation log", () => {
     expect(entries[0]?.id).toBe("DEV-001");
   });
 
-  it("last entry has id DEV-061", () => {
+  it("last entry has id DEV-062", () => {
     const entries = parseDeviationLog(REAL_LOG);
-    expect(entries[entries.length - 1]?.id).toBe("DEV-061");
+    expect(entries[entries.length - 1]?.id).toBe("DEV-062");
   });
 
   it("implementada entries have at least one coveredBy reference", () => {
