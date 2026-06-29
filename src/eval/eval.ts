@@ -206,6 +206,14 @@ function makeClosure(node: BlockNode, ctx: EvalCtx): STClosure {
   };
 }
 
+/** Señala un Error de Smalltalk capturable (mismo patrón que en method.ts/primitives.ts). */
+function signalError(text: string, u: Universe): never {
+  const error = u.namespace.get("Error");
+  if (error === undefined) throw new Error(text);
+  send(error, "signal:", [makeString(text, u)], u);
+  throw new Error(`${text} (sin handler)`);
+}
+
 /**
  * evalBlock — invoca un BlockClosure con `args` (value/value:/...). Abre un scope
  * hijo del scope capturado, liga los params (chequea aridad), evalúa el cuerpo y
@@ -215,8 +223,9 @@ function makeClosure(node: BlockNode, ctx: EvalCtx): STClosure {
 export function evalBlock(closure: STClosure, args: STValue[], u: Universe): STValue {
   const params = closure.node.params;
   if (params.length !== args.length) {
-    throw new Error(
+    signalError(
       `aridad incorrecta: el bloque espera ${params.length} argumento(s), recibió ${args.length}`,
+      u,
     );
   }
   const scope: Scope = {

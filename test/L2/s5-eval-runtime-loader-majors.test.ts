@@ -1,6 +1,6 @@
 /**
  * S5-eval-runtime-loader-majors — regresión para los bugs de eval/method/object/kernel/
- * kernel-loader del sweep de auditoría (ranks #13, #16, #20, #21, #22).
+ * kernel-loader del sweep de auditoría (ranks #13, #16, #20, #21, #22, #evalBlock-arity).
  *
  * #13 — evalSequence sobreescribe el binding de un parámetro si una temporal
  *        tiene el mismo nombre: `[:x | | x | x] value: 42` devuelve nil en vez de 42.
@@ -14,6 +14,9 @@
  * #22 — subclass: (subclassFull / subclassShort) no verifica duplicados en el namespace:
  *        `Object subclass: #DupK. Object subclass: #DupK` silenciosamente machaca la
  *        clase original sin señalar error.
+ * #evalBlock-arity — evalBlock lanzaba host Error (no capturable) cuando la aridad
+ *        del bloque no coincide con los argumentos pasados a value/value:/...; debería
+ *        señalar un Error de Smalltalk capturable via on:do:.
  *
  * #12 — FALSE POSITIVE documentado: args evaluadas "dos veces" cuando super se usa
  *        a nivel raíz. El flujo real es: args evaluadas UNA vez en línea 255, luego
@@ -187,5 +190,27 @@ describe("S5 #22 · subclass: señala error si la clase ya existe", () => {
       Object subclass: #FreshClass9911.
       FreshClass9911 new class name`;
     expect(printString(evalSt(src))).toBe("FreshClass9911");
+  });
+});
+
+// ── Finding #evalBlock-arity · evalBlock aridad incorrecta es capturable ────────
+
+describe("S5 #evalBlock-arity · aridad incorrecta en bloque es Error capturable", () => {
+  it("on:do: captura la aridad incorrecta al llamar value: con menos args de los esperados", () => {
+    // Antes del fix: evalBlock hacía `throw new Error(...)` (host throw), escapando
+    // al VM host en vez de señalar un Error de Smalltalk capturable con on:do:.
+    const src = "[[:x :y | x + y] value: 1] on: Error do: [:e | #arityErr]";
+    expect(printString(evalSt(src))).toBe("#arityErr");
+  });
+
+  it("on:do: captura la aridad incorrecta al llamar value sin args cuando se esperan", () => {
+    // Bloque unario llamado con argumento de más.
+    const src = "[[:x | x] value] on: Error do: [:e | #arityErr2]";
+    expect(printString(evalSt(src))).toBe("#arityErr2");
+  });
+
+  it("aridad correcta sigue funcionando sin excepción", () => {
+    // El caso feliz no debe verse afectado.
+    expect(printString(evalSt("[:x :y | x + y] value: 3 value: 4"))).toBe("7");
   });
 });
