@@ -19,6 +19,7 @@ import type { SequenceNode } from "../ast/nodes.js";
 import { parse } from "../parser/index.js";
 import {
   type HomeMarker,
+  makeString,
   NonLocalReturn,
   type Primitive,
   type Scope,
@@ -27,6 +28,15 @@ import {
   type Universe,
 } from "../runtime/index.js";
 import { type EvalCtx, evalSequence } from "./eval.js";
+import { send } from "./send.js";
+
+/** Señala un Error de Smalltalk capturable (mismo patrón que signalError en primitives.ts). */
+function signalError(text: string, u: Universe): never {
+  const error = u.namespace.get("Error");
+  if (error === undefined) throw new Error(text);
+  send(error, "signal:", [makeString(text, u)], u);
+  throw new Error(`${text} (sin handler)`);
+}
 
 /** Metadatos de un CompiledMethod (reflexión/provenance + defining-class para super). */
 export interface CompiledMethodMeta {
@@ -71,6 +81,11 @@ function splitPattern(source: string): { selector: string; params: string[]; bod
   let close = -1;
   for (let i = open; i < source.length; i++) {
     const c = source[i];
+    // Skip char-literals: $X — the character after `$` is never a bracket delimiter (finding #21).
+    if (c === "$") {
+      i++;
+      continue;
+    }
     if (c === "[") depth++;
     else if (c === "]") {
       depth--;
@@ -125,6 +140,13 @@ function activate(
   args: STValue[],
   u: Universe,
 ): STValue {
+  // Arity guard: like evalBlock, reject mismatched argument count (finding #20).
+  if (args.length !== meta.params.length) {
+    signalError(
+      `Error de aridad: ${meta.selector} espera ${meta.params.length} argumento(s), recibió ${args.length}`,
+      u,
+    );
+  }
   const home: HomeMarker = {};
   const vars = new Map<string, STValue>();
   meta.params.forEach((name, i) => {

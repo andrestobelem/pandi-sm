@@ -357,7 +357,11 @@ function tryLoopSpecialForm(node: MessageSendNode, ctx: EvalCtx): STValue | type
  */
 export function evalSequence(seq: SequenceNode, ctx: EvalCtx): STValue {
   for (const temp of seq.temporaries) {
-    ctx.scope.vars.set(temp.name, ctx.u.nil);
+    // Guard: if a parameter binding already exists (e.g. a block param reused
+    // as a temp variable name), preserve it — do NOT overwrite with nil.
+    if (!ctx.scope.vars.has(temp.name)) {
+      ctx.scope.vars.set(temp.name, ctx.u.nil);
+    }
   }
   let value: STValue = ctx.u.nil;
   for (const stmt of seq.statements) {

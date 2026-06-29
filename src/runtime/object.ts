@@ -583,7 +583,9 @@ export function instVarAtPut(obj: STObject, i: number, value: STValue): STValue 
  * (único por objeto, estable entre llamadas). booleans -> 1/0.
  */
 export function identityHash(v: STValue, _u: Universe): number {
-  if (typeof v === "number") return v | 0;
+  // Integers: unify number and bigint through the same formula so that
+  // identical(n, BigInt(n)) === true implies identityHash(n) === identityHash(BigInt(n)).
+  if (typeof v === "number") return Number(BigInt(v) % 0x7fffffffn) | 0;
   if (typeof v === "bigint") return Number(v % 0x7fffffffn) | 0;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "string") {

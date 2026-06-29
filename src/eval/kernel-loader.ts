@@ -150,6 +150,11 @@ function splitMethodDefs(noComments: string, owner: string): string[] {
     let close = -1;
     for (let i = open; i < noComments.length; i++) {
       const c = noComments[i];
+      // Skip char-literals: $X — the character after `$` is never a bracket delimiter.
+      if (c === "$") {
+        i++; // skip the literal character (finding #21)
+        continue;
+      }
       if (c === "[") depth++;
       else if (c === "]") {
         depth--;

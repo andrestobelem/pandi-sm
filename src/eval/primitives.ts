@@ -1312,6 +1312,11 @@ function countIvars(arg: STValue | undefined): number {
 function subclassFull(receiver: STValue, args: STValue[], u: Universe): STValue {
   const superclass = receiver as STClass;
   const name = classNameArg(args[0] as STValue);
+  // Guard: reject duplicate class names (finding #22). loadKernelSources already
+  // throws KernelLoadError{kind:'duplicate-class'}; here we signal a capturable Error.
+  if (u.namespace.has(name)) {
+    signalError(`subclass:: '${name}' ya existe en el namespace`, u);
+  }
   // DEV-025: instSize ACUMULATIVO = ivars propios + instSize de la superclase. Una
   // subclase hereda los slots de su super, así que su instancia tiene tantos slots
   // como toda la cadena (sin esto, instVarAt: del slot heredado caería fuera de rango).
@@ -1323,6 +1328,10 @@ function subclassFull(receiver: STValue, args: STValue[], u: Universe): STValue 
 function subclassShort(receiver: STValue, args: STValue[], u: Universe): STValue {
   const superclass = receiver as STClass;
   const name = classNameArg(args[0] as STValue);
+  // Guard: reject duplicate class names (finding #22).
+  if (u.namespace.has(name)) {
+    signalError(`subclass:: '${name}' ya existe en el namespace`, u);
+  }
   // DEV-025: sin ivars propios, pero hereda los slots de la superclase (acumulativo).
   return makeClassWithMetaclass(name, superclass, superclass.instSize, u);
 }
