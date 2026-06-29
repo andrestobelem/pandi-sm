@@ -9,11 +9,13 @@ import {
   identical,
   identityHash as identityHashOf,
   type Message,
+  makeClassWithMetaclass,
   notIdentical,
   type Primitive,
   type STClass,
   type STClosure,
   type STObject,
+  type STSymbol,
   type STValue,
   type Universe,
 } from "../runtime/index.js";
@@ -104,6 +106,8 @@ function describeReceiver(receiver: STValue, u: Universe): string {
   if (typeof receiver === "number" || typeof receiver === "bigint") return u.SmallInteger.name;
   if (typeof receiver === "string") return u.String.name;
   if (typeof receiver === "boolean") return receiver ? u.True.name : u.False.name;
+  // STSymbol (plain object {text}, sin slot `class`): su clase es Symbol.
+  if (typeof receiver === "object" && !("class" in receiver)) return u.Symbol.name;
   return receiver.class.name;
 }
 
@@ -287,6 +291,8 @@ function objectPerformWithWithWith(receiver: STValue, args: STValue[], u: Univer
  */
 function objectCopy(receiver: STValue, _args: STValue[], u: Universe): STValue {
   if (typeof receiver !== "object") return receiver;
+  // STSymbol (sin slot `class`): inmutable e interned, su copia es él mismo.
+  if (!("class" in receiver)) return receiver;
   // Shallow: nuevo objeto con TODOS los slots propios copiados POR REFERENCIA.
   // El spread (no un pick parcial de {class,hash,format,pointers}) preserva los
   // campos extra de STClass —name/superclass/methodDict/instSize— cuando el
@@ -331,6 +337,71 @@ function objectPrintOn(receiver: STValue): STValue {
   // Computa el texto (efecto observable futuro) y devuelve el receptor (void).
   hostPrintString(receiver);
   return receiver;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// KERNELLOAD §5.4.0 · primitivas de DEFINICIÓN del lado del metamodelo. Ancladas
+// por selector e instaladas en Class.methodDict, NO sintaxis especial: `Object
+// subclass: #Foo ...` es un keyword-send ordinario cuyo receptor es la STClass
+// Object. Todas enrutan al CAMINO ÚNICO de construcción (makeClassWithMetaclass),
+// reusando la lógica de braid del bootstrap (sin camino divergente).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Lee el nombre de clase de un argumento: STSymbol (su .text) o String nativo. */
+function classNameArg(arg: STValue): string {
+  if (typeof arg === "string") return arg;
+  if (typeof arg === "object" && arg !== null && !("class" in arg)) return (arg as STSymbol).text;
+  throw new Error("subclass: nombre de clase inválido (se esperaba un símbolo o string)");
+}
+
+/**
+ * Deriva instSize de un `instanceVariableNames:` ('a b c' -> 3). Cuenta los
+ * tokens separados por espacios; cadena vacía/sólo-espacios -> 0. Las class-vars
+ * y el package se aceptan pero el loader las ignora en esta capa (documentado).
+ */
+function countIvars(arg: STValue | undefined): number {
+  if (typeof arg !== "string") return 0;
+  const trimmed = arg.trim();
+  return trimmed === "" ? 0 : trimmed.split(/\s+/).length;
+}
+
+/**
+ * subclass:... — fabrica una subclase del receptor (una STClass) con la metaclase
+ * cableada y la registra en el namespace. Receptor no-Behavior (3, nil…) NUNCA
+ * llega aquí: la primitiva vive sólo en Class.methodDict, así que send() de un
+ * SmallInteger cae a doesNotUnderstand: (anclaje por selector, no sintaxis).
+ */
+function subclassFull(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const superclass = receiver as STClass;
+  const name = classNameArg(args[0] as STValue);
+  const instSize = countIvars(args[1]);
+  return makeClassWithMetaclass(name, superclass, instSize, u);
+}
+
+/** Variante corta `subclass:` (sin ivars/class-vars/package): instSize 0. */
+function subclassShort(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const superclass = receiver as STClass;
+  const name = classNameArg(args[0] as STValue);
+  return makeClassWithMetaclass(name, superclass, 0, u);
+}
+
+/** Behavior>>name — el nombre de la clase receptora (como String). */
+function classNamePrim(receiver: STValue): STValue {
+  return (receiver as STClass).name;
+}
+
+/** ClassDescription>>instanceVariableNames: — ajusta instSize por conteo de tokens. */
+function classInstanceVariableNames(receiver: STValue, args: STValue[]): STValue {
+  const cls = receiver as STClass;
+  cls.instSize = countIvars(args[0]);
+  return cls;
+}
+
+/** Class>>superclass: — recablea la superclase (la metaclase no se re-deriva aquí). */
+function classSetSuperclass(receiver: STValue, args: STValue[]): STValue {
+  const cls = receiver as STClass;
+  cls.superclass = args[0] as STClass;
+  return cls;
 }
 
 /** installPrimitives — cablea las primitivas del skeleton en los methodDict. */
@@ -413,4 +484,15 @@ export function installPrimitives(u: Universe): void {
   u.Object.methodDict.set(u.symbols.intern("error:"), objectError);
   u.Object.methodDict.set(u.symbols.intern("printString"), objectPrintString);
   u.Object.methodDict.set(u.symbols.intern("printOn:"), objectPrintOn);
+  // ── Primitivas de DEFINICIÓN del metamodelo (KERNELLOAD §5.4.0) ──────────
+  // Instaladas en Class.methodDict (lado-metamodelo): un keyword-send subclass:
+  // a una STClass resuelve aquí; a un no-Behavior cae a doesNotUnderstand:.
+  u.Class.methodDict.set(
+    u.symbols.intern("subclass:instanceVariableNames:classVariableNames:package:"),
+    subclassFull,
+  );
+  u.Class.methodDict.set(u.symbols.intern("subclass:"), subclassShort);
+  u.Class.methodDict.set(u.symbols.intern("name"), classNamePrim);
+  u.Class.methodDict.set(u.symbols.intern("instanceVariableNames:"), classInstanceVariableNames);
+  u.Class.methodDict.set(u.symbols.intern("superclass:"), classSetSuperclass);
 }

@@ -22,12 +22,12 @@ import {
   bootstrapKernel,
   type HomeMarker,
   NonLocalReturn,
+  ObjectFormat,
   type Scope,
   type STClosure,
   type STValue,
   type Universe,
 } from "../runtime/index.js";
-import { ObjectFormat } from "../runtime/index.js";
 import { installPrimitives } from "./primitives.js";
 import { send } from "./send.js";
 
@@ -39,7 +39,12 @@ export interface EvalCtx {
 
 let nextClosureHash = 1;
 
-/** Resuelve un global por nombre desde el Universe (clases + pseudo-vars). */
+/**
+ * Resuelve un global por nombre desde el Universe. Las pseudo-vars (nil/true/
+ * false/Transcript) tienen ramas explícitas; TODO nombre de clase se delega al
+ * namespace mutable del Universe (única fuente de verdad, KERNELLOAD §5.4.0), de
+ * modo que las clases del núcleo Y las creadas por subclass: son resolubles igual.
+ */
 function lookupGlobal(name: string, u: Universe): STValue | undefined {
   switch (name) {
     case "nil":
@@ -50,32 +55,8 @@ function lookupGlobal(name: string, u: Universe): STValue | undefined {
       return false;
     case "Transcript":
       return u.Transcript;
-    case "Object":
-      return u.Object;
-    case "Behavior":
-      return u.Behavior;
-    case "ClassDescription":
-      return u.ClassDescription;
-    case "Class":
-      return u.Class;
-    case "Metaclass":
-      return u.Metaclass;
-    case "UndefinedObject":
-      return u.UndefinedObject;
-    case "SmallInteger":
-      return u.SmallInteger;
-    case "String":
-      return u.String;
-    case "Boolean":
-      return u.Boolean;
-    case "True":
-      return u.True;
-    case "False":
-      return u.False;
-    case "BlockClosure":
-      return u.BlockClosure;
     default:
-      return undefined;
+      return u.namespace.get(name);
   }
 }
 
@@ -115,6 +96,13 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
       if (node.lit === "string") {
         if (typeof node.value === "string") return node.value;
         throw new Error("literal string sin value");
+      }
+      if (node.lit === "symbol") {
+        // #Foo evalúa al símbolo interned (identidad ==), reusando la SymbolTable
+        // que ya da identidad a los selectores (KERNELLOAD §5.4.0). classOf lo
+        // mapea a u.Symbol; el subclass: lee su .text como nombre de clase.
+        if (typeof node.value === "string") return ctx.u.symbols.intern(node.value);
+        throw new Error("literal symbol sin value");
       }
       throw new Error(`literal no soportado en el skeleton: ${node.lit}`);
     }

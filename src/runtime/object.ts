@@ -6,7 +6,7 @@
 // selectores son L2-proper (diferidos); aquí sólo cableamos lo que send() (L3)
 // necesita para hacer lookup por la superclass chain.
 
-import type { SymbolId, SymbolTable } from "./symbol-table.js";
+import type { STSymbol, SymbolId, SymbolTable } from "./symbol-table.js";
 
 /** Formato mínimo de objeto (plan §5.2 enumera el set completo; el skeleton sólo distingue Pointers). */
 export enum ObjectFormat {
@@ -96,8 +96,13 @@ export interface STClass extends STObject {
   instSize: number;
 }
 
-/** number = SmallInteger; string = String; STObject = todo lo demás (incl. nil y Transcript). */
-export type STValue = number | bigint | string | boolean | STObject;
+/**
+ * number = SmallInteger; string = String; STSymbol = Symbol (símbolo interned,
+ * identidad por referencia — lo que produce un literal #Foo); STObject = todo lo
+ * demás (incl. nil y Transcript). STSymbol es un plain object {text} SIN slot
+ * `class`; classOf lo mapea a u.Symbol explícitamente (KERNELLOAD §5.4.0).
+ */
+export type STValue = number | bigint | string | boolean | STSymbol | STObject;
 
 /** Referencias nombradas del kernel + la SymbolTable inyectada. */
 export interface Universe {
@@ -113,10 +118,15 @@ export interface Universe {
   True: STClass;
   False: STClass;
   BlockClosure: STClass;
+  Symbol: STClass; // clase de los símbolos interned (literal #Foo); classOf(STSymbol)
   Transcript_class: STClass;
   nil: STObject; // instancia única de UndefinedObject
   Transcript: STObject; // instancia única; su 'show:' (L3) acumula en un buffer
   symbols: SymbolTable;
+  // Namespace mutable de globals de clase (única fuente de verdad, KERNELLOAD
+  // §5.4.0): sembrado con el núcleo por bootstrapKernel; subclass: registra aquí
+  // cada clase nueva; lookupGlobal lo consulta para resolver nombres de clase.
+  namespace: Map<string, STClass>;
 }
 
 /**
@@ -131,6 +141,9 @@ export function classOf(v: STValue, u: Universe): STClass {
   // Es la vía SECUNDARIA (una vez el boolean fluye como receptor de un send); la
   // vía PRIMARIA es el binding global true/false en eval.ts.
   if (typeof v === "boolean") return v ? u.True : u.False;
+  // STSymbol es un plain object {text} SIN slot `class` (a diferencia de STObject);
+  // lo distinguimos por la ausencia de `class` y lo mapeamos a u.Symbol.
+  if (typeof v === "object" && !("class" in v)) return u.Symbol;
   if (typeof v === "object") return v.class;
   return u.Object;
 }
@@ -197,6 +210,14 @@ export function identityHash(v: STValue, _u: Universe): number {
     // Hash de string estilo Java (determinista): consistente con `==` por valor.
     let h = 0;
     for (let i = 0; i < v.length; i++) h = (Math.imul(31, h) + v.charCodeAt(i)) | 0;
+    return h;
+  }
+  // STSymbol (plain object {text}, sin slot `hash`): hash por su texto (estable,
+  // y consistente con su identidad interned: mismo texto => mismo símbolo).
+  if (!("hash" in v)) {
+    let h = 0;
+    const t = (v as { text: string }).text;
+    for (let i = 0; i < t.length; i++) h = (Math.imul(31, h) + t.charCodeAt(i)) | 0;
     return h;
   }
   return v.hash;

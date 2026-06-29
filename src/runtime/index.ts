@@ -2,7 +2,7 @@
 // de objeto, classOf, bootstrapKernel y SymbolTable. L3 (eval/send/primitivas)
 // consume estos tipos e instala las primitivas en los methodDict.
 
-export { bootstrapKernel } from "./kernel.js";
+export { bootstrapKernel, makeClassWithMetaclass } from "./kernel.js";
 export {
   basicNew,
   classOf,

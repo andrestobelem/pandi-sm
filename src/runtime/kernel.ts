@@ -35,6 +35,43 @@ function makeClass(name: string, superclass: STClass | null, instSize: number): 
   return cls;
 }
 
+/**
+ * makeClassWithMetaclass(name, superclass, instSize, u) — CAMINO ÚNICO de
+ * construcción de clases con braid metacircular completo, compartido por el
+ * bootstrap y la primitiva subclass: (KERNELLOAD §5.4.0: evita drift entre la API
+ * TS y el keyword-send). Fabrica la clase X y su metaclase propia "X class":
+ *   · X.class = M_X (instancia de su metaclase) — cierra classOf(X);
+ *   · M_X.class = Metaclass — cierra classOf(classOf(X)) === Metaclass;
+ *   · M_X.superclass = classOf(X.superclass) (paralelismo del braid); para la raíz
+ *     (superclass nil/null) la metaclase hereda de Class (la "trampa" Object class).
+ * Registra la clase en el namespace. Devuelve X. NO ejecuta initialize.
+ */
+export function makeClassWithMetaclass(
+  name: string,
+  superclass: STClass,
+  instSize: number,
+  u: Universe,
+): STClass {
+  const cls = makeClass(name, superclass, instSize);
+  const meta: STClass = {
+    name: `${name} class`,
+    superclass: null,
+    methodDict: new Map(),
+    instSize: 0,
+    class: u.Metaclass,
+    hash: nextHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+  };
+  cls.class = meta;
+  const sup = cls.superclass;
+  // La metaclase hereda de classOf(superclass); si la superclase es la raíz (nil),
+  // hereda de Class (la trampa). superclass es siempre una STClass viva aquí.
+  meta.superclass = sup !== null && sup !== u.nil && "methodDict" in sup ? sup.class : u.Class;
+  u.namespace.set(name, cls);
+  return cls;
+}
+
 /** bootstrapKernel — devuelve un Universe fresco con referencias nombradas. */
 export function bootstrapKernel(): Universe {
   const symbols = new SymbolTable();
@@ -61,6 +98,9 @@ export function bootstrapKernel(): Universe {
   const True_ = makeClass("True", Boolean_, 0);
   const False_ = makeClass("False", Boolean_, 0);
   const BlockClosure = makeClass("BlockClosure", Object_, 0);
+  // Symbol < String (los símbolos interned son la clase de un literal #Foo);
+  // classOf(STSymbol) lo resuelve. El protocolo de Symbol (asString…) es diferido.
+  const Symbol_ = makeClass("Symbol", String_, 0);
   const Transcript_class = makeClass("Transcript class", Object_, 0);
 
   // ── nil: instancia única de UndefinedObject; termina las cadenas ─────────
@@ -91,6 +131,7 @@ export function bootstrapKernel(): Universe {
     True_,
     False_,
     BlockClosure,
+    Symbol_,
     Transcript_class,
   ];
 
@@ -134,6 +175,27 @@ export function bootstrapKernel(): Universe {
     pointers: [],
   };
 
+  // Namespace de globals de clase: sembrado con el núcleo por nombre (única fuente
+  // de verdad para lookupGlobal). Transcript_class queda FUERA: es un shell de
+  // metaclase interno, no un global Smalltalk (KERNELLOAD §5.4.0).
+  const namespaceClasses: STClass[] = [
+    Object_,
+    Behavior,
+    ClassDescription,
+    Class,
+    Metaclass,
+    UndefinedObject,
+    SmallInteger,
+    String_,
+    Boolean_,
+    True_,
+    False_,
+    BlockClosure,
+    Symbol_,
+  ];
+  const namespace = new Map<string, STClass>();
+  for (const X of namespaceClasses) namespace.set(X.name, X);
+
   return {
     Object: Object_,
     Behavior,
@@ -147,9 +209,11 @@ export function bootstrapKernel(): Universe {
     True: True_,
     False: False_,
     BlockClosure,
+    Symbol: Symbol_,
     Transcript_class,
     nil,
     Transcript,
     symbols,
+    namespace,
   };
 }
