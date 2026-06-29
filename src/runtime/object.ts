@@ -84,6 +84,11 @@ export interface STClosure extends STObject {
   node: import("../ast/nodes.js").BlockNode;
   scope: Scope;
   home: HomeMarker;
+  // Clase DEFINIDORA del método donde se creó el bloque (KERNELLOAD §5.4.0): permite
+  // que un `super sel` DENTRO del bloque arranque el lookup en su superclase aunque
+  // el bloque se invoque después (vía value/value:/whileTrue:). undefined a tope de
+  // programa o en un bloque fuera de un método de usuario.
+  definingClass?: STClass;
 }
 
 /** Una clase es un STObject extendido con estado de Behavior (method dict + cadena de superclases). */

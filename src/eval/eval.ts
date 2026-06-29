@@ -147,6 +147,10 @@ function makeClosure(node: BlockNode, ctx: EvalCtx): STClosure {
     node,
     scope: ctx.scope,
     home: ctx.scope.home,
+    // Capturamos la clase definidora para que un `super` interno al bloque arranque
+    // el lookup en su superclase aunque el bloque se invoque después (KERNELLOAD §5.4.0).
+    // exactOptionalPropertyTypes: sólo añadimos la propiedad si hay valor.
+    ...(ctx.definingClass !== undefined ? { definingClass: ctx.definingClass } : {}),
   };
 }
 
@@ -173,7 +177,13 @@ export function evalBlock(closure: STClosure, args: STValue[], u: Universe): STV
   params.forEach((param, i) => {
     scope.vars.set(param.name, args[i] as STValue);
   });
-  return evalSequence(closure.node.body, { scope, u });
+  // El definingClass capturado en la creación viaja al ctx hijo: un `super` dentro
+  // del bloque arranca el lookup en su superclase (KERNELLOAD §5.4.0).
+  const ctx: EvalCtx =
+    closure.definingClass !== undefined
+      ? { scope, u, definingClass: closure.definingClass }
+      : { scope, u };
+  return evalSequence(closure.node.body, ctx);
 }
 
 /** Evalúa receptor y argumentos, luego despacha por send(). */

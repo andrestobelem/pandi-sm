@@ -106,6 +106,28 @@ describe("L3.5 · GATE-KERNELLOAD SUPER (positivo)", () => {
     defineMethod(C, "tag [ ^ super tag ]", u);
     expect(send(instanceOf(u, C), "tag", [], u)).toBe(100);
   });
+
+  it("`super sel` DENTRO de un ifTrue:-block alcanza la impl de la superclase", () => {
+    const u = freshUniverse();
+    const B = subclassOf(u, u.Object, "Bif");
+    const C = subclassOf(u, B, "Cif");
+    // El `super m` vive en un bloque (ifTrue:): el definingClass debe viajar con el
+    // closure para que el lookup arranque en B, no caer a resolveVariable('super').
+    defineMethod(B, "m [ ^ 99 ]", u);
+    defineMethod(C, "m [ ^ true ifTrue: [ super m ] ifFalse: [ 0 ] ]", u);
+    expect(send(instanceOf(u, C), "m", [], u)).toBe(99);
+  });
+
+  it("`super sel` DENTRO de un whileTrue:-block alcanza la impl de la superclase", () => {
+    const u = freshUniverse();
+    const B = subclassOf(u, u.Object, "Bwh");
+    const C = subclassOf(u, B, "Cwh");
+    // El cuerpo del whileTrue: es un bloque invocado por la primitiva value:
+    // capturar definingClass en el closure es lo que permite el super ahí dentro.
+    defineMethod(B, "step [ ^ 1 ]", u);
+    defineMethod(C, "run [ |x| x := 0. [ x < 1 ] whileTrue: [ x := super step ]. ^ x ]", u);
+    expect(send(instanceOf(u, C), "run", [], u)).toBe(1);
+  });
 });
 
 describe("L3.5 · `^` retorna desde el home del método", () => {
