@@ -74,4 +74,18 @@ describe("L4 · F5 · String/Symbol IDENTIDAD (>=2)", () => {
     expect(printString(evalSt("'foo' == 'foo' copy"))).toBe("false");
     expect(printString(evalSt("'foo' = 'foo' copy"))).toBe("true");
   });
+
+  it("identidad 4 — Symbol>>= es por IDENTIDAD: #foo = #foo true, #foo = 'foo' FALSE (ANSI/Pharo)", () => {
+    // Symbol interned: su '=' ES '=='. Diverge del = por contenido que heredaría de String.
+    expect(printString(evalSt("#foo = #foo"))).toBe("true");
+    expect(printString(evalSt("#foo = 'foo'"))).toBe("false");
+    expect(printString(evalSt("#foo ~= 'foo'"))).toBe("true");
+    expect(printString(evalSt("#foo = #bar"))).toBe("false");
+  });
+
+  it("identidad 5 — asimetría deliberada: 'foo' = #foo TRUE (String>>= por contenido)", () => {
+    // String>>= compara contenido y un Symbol (< String) aporta su .text; la asimetría
+    // (#foo = 'foo' false PERO 'foo' = #foo true) es la de Smalltalk estándar.
+    expect(printString(evalSt("'foo' = #foo"))).toBe("true");
+  });
 });

@@ -650,6 +650,23 @@ function stringNotEquals(receiver: STValue, args: STValue[]): STValue {
 }
 
 /**
+ * Symbol>>= — igualdad por IDENTIDAD (override de la '=' por contenido que Symbol heredaría de
+ * String). En ANSI/Pharo un Symbol es único por interning, así que su '=' ES '==': `#foo = #foo`
+ * true (mismo objeto interned), pero `#foo = 'foo'` FALSE (un String NO es el Symbol, aunque
+ * comparta los chars). Asimetría deliberada de Smalltalk: `'foo' = #foo` SÍ es true (String>>=
+ * compara contenido y un Symbol < String aporta su .text). Sin este override, Symbol heredaba
+ * stringEquals y `#foo = 'foo'` daba true (divergía del oráculo gst/Pharo — lo marcaría L6).
+ */
+function symbolEquals(receiver: STValue, args: STValue[]): STValue {
+  return identical(receiver, args[0] as STValue);
+}
+/** Symbol>>~= — coherente con Symbol>>= por identidad (String>>~= llama a stringEquals por
+ *  contenido directamente, no por dispatch, así que Symbol DEBE portar su propio ~=). */
+function symbolNotEquals(receiver: STValue, args: STValue[]): STValue {
+  return !(symbolEquals(receiver, args) as boolean);
+}
+
+/**
  * String>>, (concat) — devuelve un String FRESCO con los chars de self seguidos de los del
  * argumento. Es una operación a nivel de chars (no se expresa por do:/at: porque String no
  * hereda el protocolo de colección — DRIFT-6: el ',' de SequenceableCollection devolvería un
@@ -1388,6 +1405,11 @@ export function installPrimitives(u: Universe): void {
   // String class>>new => '' boxed (no el basicNew de Object class, que daría un String roto).
   u.String.class.methodDict.set(u.symbols.intern("new"), stringClassNew);
   u.Symbol.methodDict.set(u.symbols.intern("asString"), symbolAsString);
+  // Symbol>>= / ~= por IDENTIDAD (override del = por contenido heredado de String): #foo = #foo
+  // true (interned), #foo = 'foo' false (ANSI/Pharo Symbol identity-=). 'foo' = #foo sigue true
+  // (String>>= por contenido — asimetría deliberada de Smalltalk).
+  u.Symbol.methodDict.set(u.symbols.intern("="), symbolEquals);
+  u.Symbol.methodDict.set(u.symbols.intern("~="), symbolNotEquals);
   // ── L4 F4 · Array (boxed) · acceso indexado 1-based (at:/at:put:/size) ──────
   // at: fuera de 1..size SEÑALA un Error (L5), capturable por on: Error do:.
   u.Array.methodDict.set(u.symbols.intern("at:"), arrayAt);
