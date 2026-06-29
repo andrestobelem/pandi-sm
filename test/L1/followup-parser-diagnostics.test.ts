@@ -62,6 +62,23 @@ describe("followup · R13 dentro de bloque drena hasta `]` (no corrompe el AST)"
   });
 });
 
+// parser.ts:164 — la lista de temporaries `| ident* |` sin `|` de cierre antes se
+// tragaba los identificadores en silencio (cambiando la semántica del programa).
+describe("followup · temporaries sin `|` de cierre emite E_UNCLOSED_TEMPS", () => {
+  it("`| x y z` emite E_UNCLOSED_TEMPS (antes: sin error)", () => {
+    expect(codes("| x y z")).toContain("E_UNCLOSED_TEMPS");
+  });
+
+  it("`| x | SmallInteger` (bien cerrado) NO emite E_UNCLOSED_TEMPS", () => {
+    expect(codes("| x | SmallInteger")).not.toContain("E_UNCLOSED_TEMPS");
+  });
+
+  it("un `|` que no abre la secuencia (no-leading) no dispara E_UNCLOSED_TEMPS", () => {
+    // parseTemporaries sólo entra si el PRIMER token es `|`; aquí arranca con `x`.
+    expect(codes("x | y")).not.toContain("E_UNCLOSED_TEMPS");
+  });
+});
+
 // parser.ts:723 — el span de E_NESTING_LIMIT apunta al SITIO de la anidación,
 // no siempre a la línea 1 columna 1.
 describe("followup · span de E_NESTING_LIMIT apunta al sitio de anidación", () => {

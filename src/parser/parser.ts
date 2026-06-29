@@ -173,7 +173,15 @@ class Parser {
     while (this.peek().type === "identifier") {
       temps.push(this.variable(this.advance()));
     }
-    if (this.peek().type === "verticalBar") this.advance(); // `|` de cierre
+    if (this.peek().type === "verticalBar") {
+      this.advance(); // `|` de cierre
+    } else {
+      // Sin `|` de cierre: la lista de temporaries quedó abierta. Antes se devolvía
+      // en silencio, tragando los identificadores como temps y cambiando la semántica
+      // (un global quedaba shadowed por nil). Lo rechazamos como los demás cierres
+      // (E_UNCLOSED_*); los tokens restantes siguen disponibles para parseSequence.
+      this.error("E_UNCLOSED_TEMPS", this.peek().span, `lista de temporaries sin '|' de cierre`);
+    }
     return temps;
   }
 

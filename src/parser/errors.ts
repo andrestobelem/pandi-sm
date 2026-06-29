@@ -10,6 +10,10 @@ export type ParseErrorCode =
   | "E_UNCLOSED_ARRAY"
   | "E_UNCLOSED_BYTEARRAY"
   | "E_UNCLOSED_DYNARRAY"
+  // Lista de temporaries `| ident* |` sin el `|` de cierre. Sin este diagnóstico,
+  // `| x y z` tragaba los identificadores como temps en silencio (cambiando la
+  // semántica del programa: un global como SmallInteger quedaba shadowed por nil).
+  | "E_UNCLOSED_TEMPS"
   | "E_KEYWORD_NO_ARG"
   | "E_CASCADE_NO_RECEIVER"
   | "E_BYTE_RANGE"
