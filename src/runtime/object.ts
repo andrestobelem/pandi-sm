@@ -266,6 +266,28 @@ export function isString(v: STValue): v is STString {
 }
 
 /**
+ * ¿`v` es un Symbol interned? Un STSymbol es un plain object {text} SIN slot `class` (a
+ * diferencia de todo STObject/boxed). Formaliza el patrón inline `typeof v === "object" &&
+ * v !== null && !("class" in v)` que se repetía en las primitivas de String (un Symbol < String
+ * hereda =/asSymbol/size/, y sin esta guarda esos cuerpos lo trataban como sin texto — DEV-044..).
+ */
+export function isSymbol(v: STValue): v is STSymbol {
+  return typeof v === "object" && v !== null && !("class" in v);
+}
+
+/**
+ * textOf(v) — el texto subyacente de un String boxed (.chars) o un Symbol (.text), o null si
+ * `v` no es ninguno. Es el origen de verdad para los cuerpos de String que un Symbol hereda
+ * (=, size, ,, asSymbol): antes leían sólo `.chars`, así que un receptor/arg Symbol caía a ""
+ * o a `no es igual` (DEV-044 Symbol>>= no reflexiva; DEV-045 asSymbol => #).
+ */
+export function textOf(v: STValue): string | null {
+  if (isString(v)) return v.chars;
+  if (isSymbol(v)) return v.text;
+  return null;
+}
+
+/**
  * STStream — Stream EN MEMORIA (L4 F6): un STObject (class = una de la jerarquía Stream)
  * que es DUEÑO de su propio buffer JS (`buffer: STValue[]`) + una `position` 0-based en
  * campos dedicados (NO en `pointers`/ivars con nombre — el acceso por ivar en cuerpos .st no

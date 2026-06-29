@@ -20,6 +20,7 @@ export {
   isInterval,
   isStream,
   isString,
+  isSymbol,
   lookupMethod,
   type Message,
   makeArray,
@@ -46,6 +47,7 @@ export {
   type STStream,
   type STString,
   type STValue,
+  textOf,
   type Universe,
   Unwind,
 } from "./object.js";

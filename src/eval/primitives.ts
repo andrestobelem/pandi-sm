@@ -14,6 +14,7 @@ import {
   isCharacter,
   isFloat,
   isString,
+  isSymbol,
   type Message,
   makeArray,
   makeCharacter,
@@ -36,6 +37,7 @@ import {
   type STStream,
   type STSymbol,
   type STValue,
+  textOf,
   type Universe,
 } from "../runtime/index.js";
 import { evalBlock } from "./eval.js";
@@ -628,17 +630,20 @@ function streamPosition(receiver: STValue): STValue {
 // (subclase de String) hereda esta '=' por contenido; su identidad interned (#foo == #foo)
 // la da el == heredado de Object sobre el MISMO objeto interned.
 
-/** String>>= — igualdad por VALOR (chars); un no-String NO es igual (ANSI Object>>=, sin error). */
+/**
+ * String>>= — igualdad por VALOR (texto); un no-String/Symbol NO es igual (ANSI Object>>=, sin
+ * error). Un Symbol (< String) HEREDA esta '=', así que el RECEPTOR puede ser un String boxed
+ * (.chars) o un Symbol (.text): textOf() unifica ambos. Sin desenvolver el receptor por texto,
+ * `#foo = #foo` daba false (Symbol no es un String boxed) — no reflexiva (DEV-044).
+ */
 function stringEquals(receiver: STValue, args: STValue[]): STValue {
-  const b = args[0] as STValue;
-  if (!isString(receiver)) return false;
-  // Un Symbol es un plain object {text} (no STString boxed): comparamos contra su .text para
-  // que 'foo' = #foo siga la igualdad por contenido textual (Symbol < String en la jerarquía).
-  if (isString(b)) return receiver.chars === b.chars;
-  if (typeof b === "object" && b !== null && !("class" in b)) {
-    return receiver.chars === (b as STSymbol).text;
-  }
-  return false;
+  const recvText = textOf(receiver);
+  if (recvText === null) return false;
+  // El argumento también puede ser String boxed o Symbol: comparamos por contenido textual
+  // (Symbol < String), de modo que 'foo' = #foo y #foo = 'foo' siguen la igualdad por contenido.
+  const argText = textOf(args[0] as STValue);
+  if (argText === null) return false;
+  return recvText === argText;
 }
 function stringNotEquals(receiver: STValue, args: STValue[]): STValue {
   return !(stringEquals(receiver, args) as boolean);
@@ -652,31 +657,26 @@ function stringNotEquals(receiver: STValue, args: STValue[]): STValue {
  * propio valor; cualquier otro receptor/arg no-String señala un Error capturable (no host).
  */
 function stringConcat(receiver: STValue, args: STValue[], u: Universe): STValue {
-  if (!isString(receiver)) {
+  // El receptor puede ser un String boxed (.chars) o un Symbol (.text) que HEREDA este ','.
+  const head = textOf(receiver);
+  if (head === null) {
     return signalError("String>>, requiere un receptor String", u);
   }
   const arg = args[0] as STValue;
-  const tail = isString(arg)
-    ? arg.chars
-    : typeof arg === "object" && arg !== null && !("class" in arg)
-      ? (arg as STSymbol).text
-      : typeof arg === "string"
-        ? arg
-        : null;
+  // Un argumento String/Symbol aporta su texto; un nativo (red de seguridad) su propio valor.
+  const tail = textOf(arg) ?? (typeof arg === "string" ? arg : null);
   if (tail === null) {
     return signalError("String>>, requiere un argumento String", u);
   }
-  return makeString(receiver.chars + tail, u);
+  return makeString(head + tail, u);
 }
 
 /** String>>size — cantidad de chars (operación a nivel de chars; Symbol < String la hereda). */
 function stringSize(receiver: STValue, _args: STValue[], u: Universe): STValue {
-  if (isString(receiver)) return receiver.chars.length;
-  // Symbol (plain object {text}) hereda este selector; cuenta sobre su .text.
-  if (typeof receiver === "object" && receiver !== null && !("class" in receiver)) {
-    return (receiver as STSymbol).text.length;
-  }
-  return signalError("String>>size requiere un receptor String", u);
+  // String boxed (.chars) o Symbol (.text, < String hereda size): textOf unifica ambos.
+  const text = textOf(receiver);
+  if (text === null) return signalError("String>>size requiere un receptor String", u);
+  return text.length;
 }
 
 /**
@@ -685,8 +685,37 @@ function stringSize(receiver: STValue, _args: STValue[], u: Universe): STValue {
  * (el mismo objeto interned). Reusa u.symbols.intern (no construye un Symbol nuevo).
  */
 function stringAsSymbol(receiver: STValue, _args: STValue[], u: Universe): STValue {
-  const chars = isString(receiver) ? receiver.chars : "";
-  return u.symbols.intern(chars);
+  // El receptor puede ser un String boxed (.chars) o un Symbol (.text) que HEREDA asSymbol
+  // (ANSI Symbol>>asSymbol es ^self; re-internar su .text devuelve el MISMO objeto interned, así
+  // que #foo asSymbol == #foo). Antes leía sólo .chars y un Symbol caía a "" => # (DEV-045).
+  const text = textOf(receiver);
+  return u.symbols.intern(text ?? "");
+}
+
+/**
+ * String>>hash (heredado por Symbol) — hash por CONTENIDO, consistente con String>>= por valor
+ * (Smalltalk: a = b => a hash = b hash; lo exige el contrato Dictionary/Set). El default
+ * Object>>hash es identityHash (por objeto, monótono), así que 'foo' hash ~= 'foo' copy hash
+ * y dos cajas iguales mis-bucketean (DEV-046). Reusa el hash de string estilo Java de
+ * identityHashOf aplicado al texto (textOf unifica String boxed y Symbol). El identityHash POR
+ * OBJETO (Object>>identityHash) se conserva intacto — sólo `hash` pasa a ser por contenido.
+ */
+function stringHash(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  const text = textOf(receiver);
+  if (text === null) return identityHashOf(receiver, u);
+  // identityHashOf() ya implementa el hash estilo Java para un string JS nativo; lo reusamos
+  // sobre el texto desenvuelto en vez de duplicar el algoritmo.
+  return identityHashOf(text, u);
+}
+
+/**
+ * String class>>new — un String boxed VACÍO (chars ''), no el basicNew de Object class (que daría
+ * un STObject SIN campo `chars`, sobre el que size/,/= misfire — isString() lo rechaza, DEV-047).
+ * Override en la metaclase de String. ANSI `String new` (sin tamaño) es la cadena vacía; el
+ * String mutable growable completo (at:put: que crece) queda diferido (DEV-047, no lo pide F5).
+ */
+function stringClassNew(_receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeString("", u);
 }
 
 /**
@@ -804,7 +833,7 @@ function describeReceiver(receiver: STValue, u: Universe): string {
   if (typeof receiver === "string") return u.String.name;
   if (typeof receiver === "boolean") return receiver ? u.True.name : u.False.name;
   // STSymbol (plain object {text}, sin slot `class`): su clase es Symbol.
-  if (typeof receiver === "object" && !("class" in receiver)) return u.Symbol.name;
+  if (isSymbol(receiver)) return u.Symbol.name;
   return receiver.class.name;
 }
 
@@ -1137,9 +1166,10 @@ function objectPrintOn(receiver: STValue): STValue {
  * desenvuelven al string JS que el constructor necesita.
  */
 function classNameArg(arg: STValue): string {
-  if (isString(arg)) return arg.chars;
+  // textOf desenvuelve un String boxed (.chars) o un Symbol (.text); el nativo es red de seguridad.
+  const text = textOf(arg);
+  if (text !== null) return text;
   if (typeof arg === "string") return arg;
-  if (typeof arg === "object" && arg !== null && !("class" in arg)) return (arg as STSymbol).text;
   throw new Error("subclass: nombre de clase inválido (se esperaba un símbolo o string)");
 }
 
@@ -1347,6 +1377,11 @@ export function installPrimitives(u: Universe): void {
   // Symbol (< String) HEREDA , / size; Symbol>>asString se instala aparte (boxea su .text).
   u.String.methodDict.set(u.symbols.intern(","), stringConcat);
   u.String.methodDict.set(u.symbols.intern("size"), stringSize);
+  // hash por CONTENIDO (override del default Object>>hash por objeto): a = b => a hash = b hash
+  // (contrato Dictionary/Set). Symbol (< String) lo hereda; identityHash sigue por objeto.
+  u.String.methodDict.set(u.symbols.intern("hash"), stringHash);
+  // String class>>new => '' boxed (no el basicNew de Object class, que daría un String roto).
+  u.String.class.methodDict.set(u.symbols.intern("new"), stringClassNew);
   u.Symbol.methodDict.set(u.symbols.intern("asString"), symbolAsString);
   // ── L4 F4 · Array (boxed) · acceso indexado 1-based (at:/at:put:/size) ──────
   // at: fuera de 1..size SEÑALA un Error (L5), capturable por on: Error do:.
