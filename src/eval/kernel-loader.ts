@@ -254,7 +254,11 @@ export function loadKernelSources(u: Universe, rawSources: string[]): StSource[]
   const ordered = topologicalOrder(sources, u);
   for (const s of ordered) {
     const superclass = u.namespace.get(s.superclassName) as STClass;
-    const instSize = countIvarsFromClassDef(s.classDefNode);
+    // DEV-025: instSize ACUMULATIVO = ivars propios del class-def + slots heredados de
+    // la superclase (ya declarada en orden topológico). Sin esto, una subclase .st con
+    // ivars heredados tendría menos slots que su cadena y instVarAt: del slot heredado
+    // caería fuera de rango.
+    const instSize = countIvarsFromClassDef(s.classDefNode) + superclass.instSize;
     makeClassWithMetaclass(s.className, superclass, instSize, u);
   }
 

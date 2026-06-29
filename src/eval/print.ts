@@ -3,7 +3,7 @@
 // nil -> "nil"; otros STObject -> "a ClassName" (default Smalltalk).
 // El protocolo printOn:/displayString completo es L3-proper (diferido).
 
-import { isCharacter, isFloat, type STValue } from "../runtime/index.js";
+import { isArray, isCharacter, isFloat, type STValue } from "../runtime/index.js";
 
 /** Imprime un double con punto SIEMPRE: 3.0 => "3.0" (distinguible de SmallInteger 3). */
 function printFloat(n: number): string {
@@ -31,6 +31,10 @@ export function printString(value: STValue): string {
   // default "a ClassName" para que el bridge host concuerde con el send printString.
   if (isFloat(value)) return printFloat(value.floatValue);
   if (isCharacter(value)) return `$${String.fromCodePoint(value.codePoint)}`;
+  // L4 F4 · Array boxed => forma literal "#(e1 e2 …)" (Pharo): cada elemento por su
+  // propio printString, separados por espacio; vacío => "#()". ANTES del default
+  // "a ClassName" para que el bridge host concuerde con el send printString.
+  if (isArray(value)) return `#(${value.elements.map(printString).join(" ")})`;
   // STObject: `nil` (única instancia de UndefinedObject) imprime "nil"; el resto
   // usa el default Smalltalk "a ClassName" (printOn:/displayString son L3-proper).
   if (value.class.name === "UndefinedObject") return "nil";

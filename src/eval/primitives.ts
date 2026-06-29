@@ -8,6 +8,8 @@ import {
   classOf,
   identical,
   identityHash as identityHashOf,
+  instVarAt as instVarAtOf,
+  instVarAtPut as instVarAtPutOf,
   isCharacter,
   isFloat,
   type Message,
@@ -16,6 +18,7 @@ import {
   makeFloat,
   notIdentical,
   type Primitive,
+  type STArray,
   type STCharacter,
   type STClass,
   type STClosure,
@@ -138,6 +141,60 @@ function signalZeroDivide(u: Universe): never {
   send(zeroDivide, "signal:", ["ZeroDivide: divisor cero"], u);
   // signal: con handler desenrolla por Unwind; sin handler defaultAction ya lanzó.
   throw new Error("ZeroDivide: divisor cero (sin handler)");
+}
+
+/**
+ * SEÑALA un Error genérico vía la máquina L5 (plan §5.4/§8.10): enviamos `signal:` a la
+ * clase Error resuelta DESDE el namespace (no hardcode), reusando signalException/
+ * handlerStack sin maquinaria nueva — EXACTO mismo patrón que signalZeroDivide. NO existe
+ * SystemExceptions.IndexOutOfRange en el MVP (DRIFT-3), así que un at: fuera de rango señala
+ * el Error genérico, capturable por on: Error do:. NO devuelve (signal lanza/desenrolla); el
+ * throw final cubre el caso sin handler (defaultAction ya propagó un Error de host).
+ */
+function signalError(text: string, u: Universe): never {
+  const error = u.namespace.get("Error");
+  if (error === undefined) throw new Error("Error: jerarquía L5 no cargada");
+  send(error, "signal:", [text], u);
+  throw new Error(`${text} (sin handler)`);
+}
+
+// ── L4 F4 · Array (boxed) · acceso indexado 1-based ─────────────────────────
+// El receptor es siempre un STArray; los elementos viven en el campo dedicado
+// `elements`. at:/at:put: son 1-based (Smalltalk indexa desde 1, origin=dialecto vs el
+// 0-based de JS, §5.4); un índice fuera de 1..size SEÑALA un Error capturable (L5).
+
+/** Convierte un índice Smalltalk (number|bigint) a entero JS, o señala si no es entero. */
+function arrayIndex(arg: STValue, u: Universe): number {
+  if (typeof arg === "number") return arg;
+  if (typeof arg === "bigint") return Number(arg);
+  signalError(`Array>>at:: índice no entero`, u);
+}
+
+/** Array>>size — la cantidad de elementos (SmallInteger nativo). */
+function arraySize(receiver: STValue): STValue {
+  return (receiver as STArray).elements.length;
+}
+
+/** Array>>at: index — lee el elemento 1-based; fuera de 1..size señala un Error (L5). */
+function arrayAt(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const arr = receiver as STArray;
+  const i = arrayIndex(args[0] as STValue, u);
+  if (i < 1 || i > arr.elements.length) {
+    signalError(`Array>>at:: índice ${i} fuera de rango 1..${arr.elements.length}`, u);
+  }
+  return arr.elements[i - 1] as STValue;
+}
+
+/** Array>>at:put: index value — escribe el slot 1-based y devuelve el valor; fuera de rango señala. */
+function arrayAtPut(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const arr = receiver as STArray;
+  const i = arrayIndex(args[0] as STValue, u);
+  const value = args[1] as STValue;
+  if (i < 1 || i > arr.elements.length) {
+    signalError(`Array>>at:put:: índice ${i} fuera de rango 1..${arr.elements.length}`, u);
+  }
+  arr.elements[i - 1] = value;
+  return value;
 }
 
 /**
@@ -545,6 +602,23 @@ function objectIsMemberOf(receiver: STValue, args: STValue[], u: Universe): STVa
   return classOf(receiver, u) === (args[0] as STClass);
 }
 
+/**
+ * instVarAt: index — lee la ivar 1-based del receptor (reflexión, plan §5.2). Delega en
+ * la función de runtime (mismo chequeo de rango). Sólo aplica a STObjects con `pointers`
+ * (un inmediato no tiene ivars). Hace observable la acumulación de instSize (DEV-025):
+ * una subclase con ivars heredados tiene esos slots.
+ */
+function objectInstVarAt(receiver: STValue, args: STValue[]): STValue {
+  const i = Number(args[0] as number | bigint);
+  return instVarAtOf(receiver as STObject, i);
+}
+
+/** instVarAt:put: index value — escribe la ivar 1-based del receptor y devuelve el valor. */
+function objectInstVarAtPut(receiver: STValue, args: STValue[]): STValue {
+  const i = Number(args[0] as number | bigint);
+  return instVarAtPutOf(receiver as STObject, i, args[1] as STValue);
+}
+
 /** isKindOf: — true si el argumento está en la superclass chain de classOf(receiver). */
 function objectIsKindOf(receiver: STValue, args: STValue[], u: Universe): STValue {
   const target = args[0] as STClass;
@@ -699,15 +773,19 @@ function countIvars(arg: STValue | undefined): number {
 function subclassFull(receiver: STValue, args: STValue[], u: Universe): STValue {
   const superclass = receiver as STClass;
   const name = classNameArg(args[0] as STValue);
-  const instSize = countIvars(args[1]);
+  // DEV-025: instSize ACUMULATIVO = ivars propios + instSize de la superclase. Una
+  // subclase hereda los slots de su super, así que su instancia tiene tantos slots
+  // como toda la cadena (sin esto, instVarAt: del slot heredado caería fuera de rango).
+  const instSize = countIvars(args[1]) + superclass.instSize;
   return makeClassWithMetaclass(name, superclass, instSize, u);
 }
 
-/** Variante corta `subclass:` (sin ivars/class-vars/package): instSize 0. */
+/** Variante corta `subclass:` (sin ivars/class-vars/package): hereda los slots de la super. */
 function subclassShort(receiver: STValue, args: STValue[], u: Universe): STValue {
   const superclass = receiver as STClass;
   const name = classNameArg(args[0] as STValue);
-  return makeClassWithMetaclass(name, superclass, 0, u);
+  // DEV-025: sin ivars propios, pero hereda los slots de la superclase (acumulativo).
+  return makeClassWithMetaclass(name, superclass, superclass.instSize, u);
 }
 
 /** Behavior>>name — el nombre de la clase receptora (como String). */
@@ -715,10 +793,15 @@ function classNamePrim(receiver: STValue): STValue {
   return (receiver as STClass).name;
 }
 
-/** ClassDescription>>instanceVariableNames: — ajusta instSize por conteo de tokens. */
+/** ClassDescription>>instanceVariableNames: — ajusta instSize (acumulativo, DEV-025). */
 function classInstanceVariableNames(receiver: STValue, args: STValue[]): STValue {
   const cls = receiver as STClass;
-  cls.instSize = countIvars(args[0]);
+  // DEV-025: cuenta los ivars PROPIOS y suma los slots heredados de la superclase.
+  const superInstSize =
+    cls.superclass !== null && "methodDict" in cls.superclass
+      ? (cls.superclass as STClass).instSize
+      : 0;
+  cls.instSize = countIvars(args[0]) + superInstSize;
   return cls;
 }
 
@@ -849,6 +932,11 @@ export function installPrimitives(u: Universe): void {
   );
   u.Character.methodDict.set(u.symbols.intern("="), characterEquals);
   u.Character.methodDict.set(u.symbols.intern("~="), characterNotEquals);
+  // ── L4 F4 · Array (boxed) · acceso indexado 1-based (at:/at:put:/size) ──────
+  // at: fuera de 1..size SEÑALA un Error (L5), capturable por on: Error do:.
+  u.Array.methodDict.set(u.symbols.intern("at:"), arrayAt);
+  u.Array.methodDict.set(u.symbols.intern("at:put:"), arrayAtPut);
+  u.Array.methodDict.set(u.symbols.intern("size"), arraySize);
   // Condicionales como sends reales (DEV-003): instalados en True/False, no inline.
   u.True.methodDict.set(u.symbols.intern("ifTrue:"), trueIfTrue);
   u.False.methodDict.set(u.symbols.intern("ifTrue:"), falseIfTrue);
@@ -908,6 +996,9 @@ export function installPrimitives(u: Universe): void {
   u.Object.methodDict.set(u.symbols.intern("ifNotNil:ifNil:"), objectIfNotNilIfNil);
   u.UndefinedObject.methodDict.set(u.symbols.intern("ifNotNil:ifNil:"), undefinedIfNotNilIfNil);
   u.Object.methodDict.set(u.symbols.intern("isMemberOf:"), objectIsMemberOf);
+  // Reflexión de ivars indexadas (1-based): hacen observable el instSize acumulativo (DEV-025).
+  u.Object.methodDict.set(u.symbols.intern("instVarAt:"), objectInstVarAt);
+  u.Object.methodDict.set(u.symbols.intern("instVarAt:put:"), objectInstVarAtPut);
   u.Object.methodDict.set(u.symbols.intern("isKindOf:"), objectIsKindOf);
   u.Object.methodDict.set(u.symbols.intern("respondsTo:"), objectRespondsTo);
   u.Object.methodDict.set(u.symbols.intern("perform:"), objectPerform);

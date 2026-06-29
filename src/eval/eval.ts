@@ -24,6 +24,7 @@ import { parse } from "../parser/index.js";
 import {
   bootstrapKernel,
   type HomeMarker,
+  makeArray,
   makeCharacter,
   makeFloat,
   NonLocalReturn,
@@ -34,6 +35,7 @@ import {
   type Universe,
 } from "../runtime/index.js";
 import { installExceptionPrimitives } from "./exceptions.js";
+import { loadCollectionMethods } from "./kernel-collections.js";
 import { KERNEL_EXCEPTION_SOURCES } from "./kernel-exceptions.js";
 import { loadKernelSources } from "./kernel-loader.js";
 import { loadNumericMethods } from "./kernel-numerics.js";
@@ -133,6 +135,15 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
         }
         throw new Error("literal character sin value string");
       }
+      // L4 F4 · #( ) / #[ ] -> Array (boxed). Los elementos de un literal-array son
+      // LiteralNode[] (no `value`): los reificamos recursivamente (un anidado #( … ) es
+      // otro lit:'array'). #[ ] es un Array de SmallIntegers en el MVP (NO una clase
+      // ByteArray distinta; marcado, se flaggea para el log L6). Los símbolos bare-word
+      // dentro de #( ) quedan diferidos (MVP numbers-only, plan §5.4).
+      if (node.lit === "array" || node.lit === "byteArray") {
+        const els = (node.elements ?? []).map((e) => evalNode(e, ctx));
+        return makeArray(els, ctx.u);
+      }
       throw new Error(`literal no soportado en el skeleton: ${node.lit}`);
     }
     case "MessageSend":
@@ -152,6 +163,12 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
     }
     case "Block":
       return makeClosure(node, ctx);
+    case "DynamicArray": {
+      // L4 F4 · { e1. e2 } -> Array: a diferencia de #( ), los elementos son
+      // EXPRESIONES (no literales), así que se evalúan en el contexto léxico actual.
+      const els = node.elements.map((e) => evalNode(e, ctx));
+      return makeArray(els, ctx.u);
+    }
     default:
       throw new Error(`nodo no soportado en el skeleton: ${node.type}`);
   }
@@ -364,6 +381,11 @@ export function evalWith(source: string): EvalResult {
   // torre numérica del núcleo (Magnitude/Number/Integer/Float/Character ya viven en
   // bootstrap; aquí sólo se añaden los cuerpos, con tag de procedencia).
   loadNumericMethods(universe);
+  // L4 F4: cuerpos derivados de la base de colecciones (.st: first/last sobre
+  // SequenceableCollection, en términos de at:/size). La cadena abstracta Collection<-
+  // SequenceableCollection<-Array vive en bootstrap; aquí sólo se añaden los cuerpos,
+  // con tag de procedencia (GATE-L4-PROVENANCE).
+  loadCollectionMethods(universe);
   // Scope de programa: self = nil (no hay receptor de método a tope de programa;
   // nil es el receptor convencional del doIt). home = un marcador fresco.
   const home: HomeMarker = {};

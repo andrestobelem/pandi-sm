@@ -101,6 +101,14 @@ export function bootstrapKernel(): Universe {
   const SmallInteger = makeClass("SmallInteger", Integer, 0);
   const Float = makeClass("Float", Number_, 0);
   const Character = makeClass("Character", Magnitude, 0);
+  // ── L4 F4 · base de colecciones: Collection <- SequenceableCollection <- Array.
+  // La cadena abstracta se cablea AQUÍ (no en .st: el cargador rechazaría re-declarar
+  // la torre, y u.Array debe existir antes de classOf/los constructores { }/#( )/#[ ]).
+  // Los CUERPOS de método (do:/collect:/at:/...) los instala kernel-collections vía
+  // defineMethod con tag de procedencia (GATE-L4-PROVENANCE), igual que kernel-numerics.
+  const Collection = makeClass("Collection", Object_, 0);
+  const SequenceableCollection = makeClass("SequenceableCollection", Collection, 0);
+  const Array_ = makeClass("Array", SequenceableCollection, 0);
   const String_ = makeClass("String", Object_, 0);
   // Boolean < Object; True/False < Boolean. true/false son booleans nativos JS
   // (classOf los mapea a True/False); estas clases existen para que ifTrue:/and:/not
@@ -142,6 +150,9 @@ export function bootstrapKernel(): Universe {
     SmallInteger,
     Float,
     Character,
+    Collection,
+    SequenceableCollection,
+    Array_,
     String_,
     Boolean_,
     True_,
@@ -207,6 +218,9 @@ export function bootstrapKernel(): Universe {
     SmallInteger,
     Float,
     Character,
+    Collection,
+    SequenceableCollection,
+    Array_,
     String_,
     Boolean_,
     True_,
@@ -227,6 +241,7 @@ export function bootstrapKernel(): Universe {
     SmallInteger,
     Float,
     Character,
+    Array: Array_,
     String: String_,
     Boolean: Boolean_,
     True: True_,

@@ -73,17 +73,30 @@ const OBJECT_L4_IFNIL_SELECTORS = [
   "ifNotNil:ifNil:",
 ] as const;
 
+/**
+ * Extensión L4-F4 al protocolo de Object: la reflexión de ivars indexadas
+ * (instVarAt:/instVarAt:put:, plan §5.2 reflexión). Adición DELIBERADA y documentada:
+ * hace OBSERVABLE el instSize acumulativo (DEV-025, una subclase con ivars heredados
+ * tiene esos slots). El invariante incorpora estas 2 al "y nada más".
+ */
+const OBJECT_L4_REFLECT_SELECTORS = ["instVarAt:", "instVarAt:put:"] as const;
+
 describe("L2 · <Object> · los 23 selectores instalados y alcanzables (§5.2)", () => {
-  it("Object.methodDict contiene los 23 del núcleo + la familia ifNil: de L4 (y nada más)", () => {
+  it("Object.methodDict contiene los 23 del núcleo + ifNil: (L4-F1) + reflexión de ivars (L4-F4) y nada más", () => {
     const u = kernel();
-    // count === 23 (núcleo S3) + 4 (familia ifNil: de L4-F1): ni de más ni de menos.
+    // count === 23 (núcleo S3) + 4 (familia ifNil: L4-F1) + 2 (instVarAt:* L4-F4).
     expect(u.Object.methodDict.size).toBe(
-      OBJECT_SELECTORS.length + OBJECT_L4_IFNIL_SELECTORS.length,
+      OBJECT_SELECTORS.length +
+        OBJECT_L4_IFNIL_SELECTORS.length +
+        OBJECT_L4_REFLECT_SELECTORS.length,
     );
     for (const sel of OBJECT_SELECTORS) {
       expect(u.Object.methodDict.has(u.symbols.intern(sel))).toBe(true);
     }
     for (const sel of OBJECT_L4_IFNIL_SELECTORS) {
+      expect(u.Object.methodDict.has(u.symbols.intern(sel))).toBe(true);
+    }
+    for (const sel of OBJECT_L4_REFLECT_SELECTORS) {
       expect(u.Object.methodDict.has(u.symbols.intern(sel))).toBe(true);
     }
   });

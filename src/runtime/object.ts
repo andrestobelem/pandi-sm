@@ -180,9 +180,25 @@ export interface STCharacter extends STObject {
   codePoint: number;
 }
 
+/**
+ * STArray — Array BOXED (L4 F4): un STObject (class = u.Array) que porta sus elementos
+ * en un campo dedicado `elements` (NO en slots de `pointers`, mismo motivo que Float/
+ * Character: una subclase con instSize 0 no tendría slots indexados, y el acceso por
+ * nombre de ivar en cuerpos .st no está cableado). Tamaño FIJO (at:put: escribe slots
+ * existentes; el crecimiento vive en OrderedCollection, S2). { }/#( )/#[ ] reifican aquí.
+ */
+export interface STArray extends STObject {
+  elements: STValue[];
+}
+
 /** ¿`v` es un Float boxed? (tiene el campo dedicado `floatValue`). */
 export function isFloat(v: STValue): v is STFloat {
   return typeof v === "object" && "class" in v && typeof (v as STFloat).floatValue === "number";
+}
+
+/** ¿`v` es un Array boxed? (tiene el campo dedicado `elements`). */
+export function isArray(v: STValue): v is STArray {
+  return typeof v === "object" && "class" in v && Array.isArray((v as STArray).elements);
 }
 
 /** ¿`v` es un Character boxed? (tiene el campo dedicado `codePoint`). */
@@ -222,6 +238,10 @@ export interface Universe {
   // y se cablean aquí para que classOf y los constructores las referencien sin lookup.
   Float: STClass;
   Character: STClass;
+  // L4 F4: clase concreta de los Arrays boxed (STObject con campo dedicado `elements`).
+  // Se materializa vía .st (kernel-collections) y se cablea aquí para que classOf y los
+  // constructores { }/#( )/#[ ] la referencien sin lookup.
+  Array: STClass;
   String: STClass;
   Boolean: STClass;
   True: STClass;
@@ -317,6 +337,22 @@ export function makeCharacter(codePoint: number, u: Universe): STCharacter {
     format: ObjectFormat.Pointers,
     pointers: [],
     codePoint,
+  };
+}
+
+/**
+ * makeArray(elements, u) — caja un JS array de STValue como STArray (class = u.Array).
+ * Los elementos viven en el campo dedicado `elements`; `pointers` queda vacío (no usa
+ * ivars). El hash nace estable/único (identidad por referencia para ==). El array se
+ * toma TAL CUAL (el caller decide si pasar una copia); { }/#( )/#[ ] construyen uno fresco.
+ */
+export function makeArray(elements: STValue[], u: Universe): STArray {
+  return {
+    class: u.Array,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    elements,
   };
 }
 
