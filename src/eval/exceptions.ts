@@ -89,17 +89,24 @@ function isExceptionSet(v: STValue): v is ExceptionSet {
   return typeof v === "object" && "class" in v && Array.isArray((v as ExceptionSet).elements);
 }
 
-/** Exception class>>, otherClassOrSet — construye/extiende un ExceptionSet. */
+/** Exception class>>, otherClassOrSet — construye/extiende un ExceptionSet.
+ * El receptor puede ser una STClass O un ExceptionSet ya construido (asociatividad
+ * izquierda: `Error , Warning , ZeroDivide` -> (Error,Warning),ZeroDivide). En ese
+ * caso se aplana el lado izquierdo para que el ExceptionSet resultante contenga
+ * todos los elementos sin anidar sets. */
 function exceptionComma(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const left = receiver as STClass;
+  // Aplanar lado izquierdo si ya es un ExceptionSet (encadenamiento izquierdo).
+  const elements: STClass[] = isExceptionSet(receiver)
+    ? [...receiver.elements]
+    : [receiver as STClass];
+  // Aplanar lado derecho igual.
   const right = args[0] as STValue;
-  const elements: STClass[] = [left];
   if (isExceptionSet(right)) elements.push(...right.elements);
   else elements.push(right as STClass);
   const set: ExceptionSet = {
     class: u.Object,
     hash: 0,
-    format: left.format,
+    format: (elements[0] as STClass).format,
     pointers: [],
     elements,
   };
@@ -241,9 +248,14 @@ function instSignalWith(receiver: STValue, args: STValue[], u: Universe): STValu
 
 // ── Consulta de la excepción ───────────────────────────────────────────────
 
-/** Exception>>messageText — el texto fijado por signal: (nil si no se fijó). */
+/** Exception>>messageText — el texto fijado por signal: (nil si no se fijó).
+ * Normalización read-time: si messageText es un string JS nativo (guardado por rutas
+ * internas como signalMessageNotUnderstood o instSignalWith), lo boxea en STString
+ * antes de devolverlo al código de usuario (DEV-037: String es boxed en capa de valor). */
 function instMessageText(receiver: STValue, _args: STValue[], u: Universe): STValue {
-  return stateOf(receiver as STObject, u).messageText;
+  const raw = stateOf(receiver as STObject, u).messageText;
+  if (typeof raw === "string") return makeString(raw, u);
+  return raw;
 }
 
 /**
@@ -256,7 +268,8 @@ function instDescription(receiver: STValue, _args: STValue[], u: Universe): STVa
   const ex = receiver as STObject;
   const text = stateOf(ex, u).messageText as STValue;
   if (isString(text)) return text;
-  if (typeof text === "string") return text;
+  // Si messageText es string JS nativo (ruta interna), boxearlo (DEV-037).
+  if (typeof text === "string") return makeString(text, u);
   return makeString(ex.class.name, u);
 }
 
@@ -389,11 +402,14 @@ function blockOnDo(receiver: STValue, args: STValue[], u: Universe): STValue {
 }
 
 function blockOnDoOnDo(receiver: STValue, args: STValue[], u: Universe): STValue {
+  // Los handlers se pushean en orden INVERTIDO para que el PRIMERO listado quede en
+  // el tope de la pila y signalException (que escanea de tope a base) lo encuentre
+  // primero (ANSI first-listed-wins). runProtected empuja en el orden del array dado.
   return runProtected(
     receiver as STClosure,
     [
-      { exceptionClass: args[0] as STValue, handlerBlock: args[1] as STValue },
       { exceptionClass: args[2] as STValue, handlerBlock: args[3] as STValue },
+      { exceptionClass: args[0] as STValue, handlerBlock: args[1] as STValue },
     ],
     u,
   );
@@ -465,6 +481,11 @@ export function installExceptionPrimitives(u: Universe): void {
   const objectMeta = u.Object.class;
   objectMeta.methodDict.set(u.symbols.intern("new"), classBasicNew);
   objectMeta.methodDict.set(u.symbols.intern("basicNew"), classBasicNew);
+
+  // `,` en el lado-INSTANCIA de Object: los ExceptionSet tienen class=u.Object, por lo
+  // que cuando se les envía `,` el lookup pasa por u.Object.methodDict (lado instancia).
+  // Con el receptor ya siendo un ExceptionSet, exceptionComma lo aplana correctamente.
+  u.Object.methodDict.set(u.symbols.intern(","), exceptionComma);
 
   // ── Evaluación protegida + terminación (BlockClosure) ─────────────────────
   u.BlockClosure.methodDict.set(u.symbols.intern("on:do:"), blockOnDo);
