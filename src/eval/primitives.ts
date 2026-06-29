@@ -759,15 +759,26 @@ function objectIsMemberOf(receiver: STValue, args: STValue[], u: Universe): STVa
  * (un inmediato no tiene ivars). Hace observable la acumulación de instSize (DEV-025):
  * una subclase con ivars heredados tiene esos slots.
  */
-function objectInstVarAt(receiver: STValue, args: STValue[]): STValue {
+function objectInstVarAt(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const obj = receiver as STObject;
   const i = Number(args[0] as number | bigint);
-  return instVarAtOf(receiver as STObject, i);
+  // Fuera de 1..instSize SEÑALA un Error capturable (L5), igual que Array>>at: — NO un
+  // throw de host imparseable. instVarAtOf re-chequea (defensa en profundidad), pero el
+  // guard de aquí lo hace inalcanzable para el caso fuera de rango.
+  if (i < 1 || i > obj.pointers.length) {
+    signalError(`instVarAt:: índice ${i} fuera de rango 1..${obj.pointers.length}`, u);
+  }
+  return instVarAtOf(obj, i);
 }
 
 /** instVarAt:put: index value — escribe la ivar 1-based del receptor y devuelve el valor. */
-function objectInstVarAtPut(receiver: STValue, args: STValue[]): STValue {
+function objectInstVarAtPut(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const obj = receiver as STObject;
   const i = Number(args[0] as number | bigint);
-  return instVarAtPutOf(receiver as STObject, i, args[1] as STValue);
+  if (i < 1 || i > obj.pointers.length) {
+    signalError(`instVarAt:put:: índice ${i} fuera de rango 1..${obj.pointers.length}`, u);
+  }
+  return instVarAtPutOf(obj, i, args[1] as STValue);
 }
 
 /** isKindOf: — true si el argumento está en la superclass chain de classOf(receiver). */

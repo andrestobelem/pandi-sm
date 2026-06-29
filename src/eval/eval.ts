@@ -144,6 +144,16 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
         const els = (node.elements ?? []).map((e) => evalNode(e, ctx));
         return makeArray(els, ctx.u);
       }
+      // Dentro de #( ) las pseudo-vars true/false/nil son LiteralNodes (a nivel
+      // top-level parsean como Variable y resuelven vía lookupGlobal). Reifican a
+      // los MISMOS singletons que lookupGlobal (eval.ts:67-72): native true/false,
+      // u.nil. Sin estas ramas, #(true false nil) —sintaxis Smalltalk de base—
+      // caía al throw de host (NO capturable por on:Error do:). Símbolos bare-word
+      // (#(a b c)) ya reifican vía la rama "symbol"; números/strings/chars/floats
+      // /anidados ya funcionaban: true/false/nil eran el único hueco inconsistente.
+      if (node.lit === "true") return true;
+      if (node.lit === "false") return false;
+      if (node.lit === "nil") return ctx.u.nil;
       throw new Error(`literal no soportado en el skeleton: ${node.lit}`);
     }
     case "MessageSend":

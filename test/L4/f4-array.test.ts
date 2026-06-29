@@ -41,6 +41,27 @@ describe("L4 · F4 · S1 · DEV-025 instSize acumulativo", () => {
       b instVarAt: 1`;
     expect(printString(evalSt(src))).toBe("7");
   });
+
+  it("instVarAt: fuera de rango SEÑALA un Error capturable (no host-throw)", () => {
+    // Consistencia con Array>>at:: el índice reflexivo fuera de 1..instSize señala el
+    // Error genérico vía la ruta L5 (capturable por on:Error do:), NO un throw de host
+    // imparseable. Antes era un crash de host no capturable.
+    const src = `
+      | b |
+      Object subclass: #A3 instanceVariableNames: 'x' classVariableNames: '' package: 'T'.
+      b := A3 new.
+      [b instVarAt: 9] on: Error do: [:e | #oob]`;
+    expect(printString(evalSt(src))).toBe("#oob");
+  });
+
+  it("instVarAt:put: fuera de rango también SEÑALA un Error capturable", () => {
+    const src = `
+      | b |
+      Object subclass: #A4 instanceVariableNames: 'x' classVariableNames: '' package: 'T'.
+      b := A4 new.
+      [b instVarAt: 9 put: 1] on: Error do: [:e | #oob]`;
+    expect(printString(evalSt(src))).toBe("#oob");
+  });
 });
 
 describe("L4 · F4 · S1 · Array literal de superficie", () => {
@@ -62,6 +83,28 @@ describe("L4 · F4 · S1 · Array literal de superficie", () => {
 
   it("#[1 2 3] byteArray literal evalúa a un Array de SmallIntegers (MVP)", () => {
     expect(printString(evalSt("#[1 2 3]"))).toBe("#(1 2 3)");
+  });
+
+  it("#(true false nil) reifica las pseudo-vars a sus singletons (no host-throw)", () => {
+    // Regresión: true/false/nil dentro de #( ) eran LiteralNodes sin rama en evalNode
+    // y caían al throw de host (imparseable/NO capturable por on:Error do:), pese a ser
+    // sintaxis Smalltalk de base que gst/Pharo reifican. Ahora reifican a los MISMOS
+    // singletons que el top-level (native true/false, u.nil).
+    expect(printString(evalSt("#(true false nil)"))).toBe("#(true false nil)");
+  });
+
+  it("#(1 true $a nil) mezcla números/booleanos/char/nil sin romper", () => {
+    expect(printString(evalSt("#(1 true $a nil)"))).toBe("#(1 true $a nil)");
+  });
+
+  it("#(1 #(true) 2) reifica true dentro de un array anidado", () => {
+    expect(printString(evalSt("#(1 #(true) 2)"))).toBe("#(1 #(true) 2)");
+  });
+
+  it("el primer elemento de #(true false nil) ES el singleton true (identidad)", () => {
+    // == contra la pseudo-var true confirma que reifica al MISMO valor, no a un proxy.
+    expect(printString(evalSt("(#(true false nil) at: 1) == true"))).toBe("true");
+    expect(printString(evalSt("(#(true false nil) at: 3) == nil"))).toBe("true");
   });
 
   it("classOf de un Array es Array (identidad con el global Array)", () => {
