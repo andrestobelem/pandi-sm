@@ -38,6 +38,30 @@ describe("followup · param-list de bloque malformada emite diagnóstico (DEV-01
   });
 });
 
+// parser.ts:135 — R13 dentro de un bloque: tras `^expr.` con más tokens antes del
+// `]`, el `break` dejaba el `]` (y los tokens intermedios) sin consumir, que el
+// outer message-parsing absorbía como envíos, produciendo 3 errores y un AST
+// corrupto (MessageSend en vez de Block). Drenar hasta el cierre => 1 error y Block.
+describe("followup · R13 dentro de bloque drena hasta `]` (no corrompe el AST)", () => {
+  it("`[:x | ^x. x + 1]` emite exactamente un E_UNEXPECTED_TOKEN y ningún E_UNCLOSED_BLOCK", () => {
+    expect(count("[:x | ^x. x + 1]", "E_UNEXPECTED_TOKEN")).toBe(1);
+    expect(codes("[:x | ^x. x + 1]")).not.toContain("E_UNCLOSED_BLOCK");
+  });
+
+  it("el statement top-level del bloque sigue siendo un Block (no MessageSend)", () => {
+    const ast = parse("[:x | ^x. x + 1]").ast;
+    expect(ast?.body.statements[0]?.type).toBe("Block");
+  });
+
+  it("R13 top-level `^3. 4` sigue emitiendo un solo E_UNEXPECTED_TOKEN en offset 4", () => {
+    const errs = parse("^3. 4").errors.filter(
+      (e) => (e as ParseError).code === "E_UNEXPECTED_TOKEN",
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.span.start.offset).toBe(4);
+  });
+});
+
 // parser.ts:723 — el span de E_NESTING_LIMIT apunta al SITIO de la anidación,
 // no siempre a la línea 1 columna 1.
 describe("followup · span de E_NESTING_LIMIT apunta al sitio de anidación", () => {

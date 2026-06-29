@@ -132,6 +132,11 @@ class Parser {
         if (stmt?.type === "Return" && !this.atClose(close)) {
           const t = this.peek();
           this.error("E_UNEXPECTED_TOKEN", t.span, `statement tras ^ terminal (R13): ${t.type}`);
+          // Recuperación: drenamos hasta el cierre en vez de `break`. Romper dejaba
+          // el `]` (y los tokens intermedios) sin consumir; dentro de un bloque el
+          // outer message-parsing los absorbía como envíos al Block, produciendo un
+          // E_UNCLOSED_BLOCK espurio y un AST corrupto (mismo patrón que el `:=` de R8).
+          while (!this.atClose(close)) this.advance();
           break;
         }
         continue;
