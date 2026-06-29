@@ -9,11 +9,10 @@
  *  - L6.H: works with any layer; no code changes needed to add a new layer
  */
 
-import { readFileSync } from "node:fs";
 import { parse } from "../../src/parser/index.js";
 import { PandiRuntimeAdapter } from "../../src/runtime/adapter.js";
 import type { LexErrorCode } from "../../src/lexer/errors.js";
-import { parseFrontmatter } from "./st-runner.js";
+import { loadConformanceCase } from "./st-runner.js";
 
 // ─── LEX error code set ──────────────────────────────────────────────────────
 // Used to partition errors by phase (lex vs parse).
@@ -161,10 +160,26 @@ function classifyErrorPhase(code: string): "lex" | "parse" {
 export function runConformanceCase(file: string): ConformanceCaseResult {
   const start = Date.now();
 
-  // Load frontmatter (lenient — conformance runner reads raw meta)
-  let src: string;
+  // Load frontmatter STRICTLY (L6.C: fail-not-skip on schema violation).
+  // loadConformanceCase throws if the file is unreadable, has no frontmatter,
+  // or is missing/invalid required fields (id, kind, phase, layer, spec,
+  // origin, section).  Any such error is reported as status='error'.
+  let body: string;
+  let id: string;
+  let layer: string;
+  let section: string;
+  let phase: string;
+  let kind: string;
+  let meta: import("./st-runner.js").ConformanceMeta;
+
   try {
-    src = readFileSync(file, "utf8");
+    const conformanceCase = loadConformanceCase(file);
+    ({ body, meta } = conformanceCase);
+    id = meta.id;
+    layer = meta.layer;
+    section = meta.section;
+    phase = meta.phase;
+    kind = meta.kind;
   } catch (e) {
     return {
       id: file,
@@ -174,17 +189,10 @@ export function runConformanceCase(file: string): ConformanceCaseResult {
       phase: "unknown",
       kind: "unknown",
       status: "error",
-      message: `Cannot read file: ${e instanceof Error ? e.message : String(e)}`,
+      message: `Schema error: ${e instanceof Error ? e.message : String(e)}`,
       duration: Date.now() - start,
     };
   }
-
-  const { meta, body } = parseFrontmatter(src);
-  const id = meta.id ?? file;
-  const layer = meta.layer ?? "unknown";
-  const section = meta.section ?? "unknown";
-  const phase = meta.phase ?? "unknown";
-  const kind = meta.kind ?? "unknown";
 
   const fail = (message: string): ConformanceCaseResult => ({
     id,

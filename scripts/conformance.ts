@@ -92,8 +92,11 @@ if (failures.length > 0) {
   logError("");
 }
 
-// Traceability check
+// Traceability check (L6.E): bidirectional deviation log verification.
+// traceOk gates the final exit alongside advance.exit0 — if traceability
+// fails the run must exit 1 even when the layer gate is green.
 const deviationLogPath = join(REPO_ROOT, "doc/research/log-de-desviaciones.md");
+let traceOk = true;
 try {
   const log_ = parseDeviationLog(deviationLogPath);
   const { loadConformanceCase } = await import("../test/harness/st-runner.js");
@@ -104,9 +107,11 @@ try {
   } else {
     logError("Traceability ERRORS:");
     for (const e of traceResult.errors) logError(`  ${e}`);
+    traceOk = false;
   }
 } catch (e) {
-  logError(`Traceability check skipped: ${e instanceof Error ? e.message : String(e)}`);
+  logError(`Traceability check failed: ${e instanceof Error ? e.message : String(e)}`);
+  traceOk = false;
 }
 log("");
 
@@ -123,7 +128,7 @@ log("");
 log(`Gate: ${advance.summary}`);
 log("");
 
-if (advance.exit0) {
+if (advance.exit0 && traceOk) {
   log("CONFORMANCE: PASS");
   process.exit(0);
 } else {

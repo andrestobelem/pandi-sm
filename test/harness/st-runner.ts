@@ -65,6 +65,8 @@ export interface ConformanceMeta {
   codes?: string;
   /** DEV-NNN entry that covers this case (required if origin != spec-ANSI). */
   deviation?: string;
+  /** Expected printString for positive eval cases (optional assertion). */
+  printString?: string;
 }
 
 /** A conformance case with STRICT typed metadata. */
