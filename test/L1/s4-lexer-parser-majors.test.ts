@@ -11,9 +11,7 @@ import { tokenize } from "../../src/lexer/index.js";
 import type { ParseError } from "../../src/parser/index.js";
 import { parse } from "../../src/parser/index.js";
 
-const types = (src: string): string[] => tokenize(src).tokens.map((t) => t.type);
 const codes = (src: string): string[] => tokenize(src).errors.map((e) => e.code);
-const pcodes = (src: string): string[] => parse(src).errors.map((e) => (e as ParseError).code);
 
 // ---------------------------------------------------------------------------
 // #14 · Byte-range check silently skips bigint values in #[...]
