@@ -31,6 +31,9 @@ import {
   type STValue,
   type Universe,
 } from "../runtime/index.js";
+import { installExceptionPrimitives } from "./exceptions.js";
+import { KERNEL_EXCEPTION_SOURCES } from "./kernel-exceptions.js";
+import { loadKernelSources } from "./kernel-loader.js";
 import { installPrimitives } from "./primitives.js";
 import { send, superSend } from "./send.js";
 
@@ -333,6 +336,13 @@ export function evalWith(source: string): EvalResult {
   }
   const universe = bootstrapKernel();
   installPrimitives(universe);
+  // L5 S2: carga la jerarquía .st de excepciones (Exception<-Error/Warning,
+  // ArithmeticError<-ZeroDivide, MessageNotUnderstood) y cablea el protocolo de
+  // control-flow (signal/on:do:/return:/resume:/pass/...) como primitivas TS sobre
+  // ella. La carga corre DESPUÉS de installPrimitives (los cuerpos .st podrían usar
+  // primitivas) y ANTES de la evaluación, así Error/Warning/... son resolubles.
+  loadKernelSources(universe, KERNEL_EXCEPTION_SOURCES);
+  installExceptionPrimitives(universe);
   // Scope de programa: self = nil (no hay receptor de método a tope de programa;
   // nil es el receptor convencional del doIt). home = un marcador fresco.
   const home: HomeMarker = {};

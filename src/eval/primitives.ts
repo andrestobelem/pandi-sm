@@ -20,6 +20,7 @@ import {
   type Universe,
 } from "../runtime/index.js";
 import { evalBlock } from "./eval.js";
+import { signalMessageNotUnderstood } from "./exceptions.js";
 import { printString as hostPrintString } from "./print.js";
 import { send } from "./send.js";
 
@@ -131,14 +132,19 @@ function blockIfCurtailed(receiver: STValue, args: STValue[], u: Universe): STVa
 }
 
 /**
- * Object>>doesNotUnderstand: — acción por defecto de un envío no entendido (S3).
- * send() llega aquí con un Message reificado (selector + args). Lanzamos un Error
- * de host OBSERVABLE y DETERMINISTA que nombra la clase del receptor y el selector;
- * el MessageNotUnderstood como Exception navegable (capturable con on:do:) es L5.
+ * Object>>doesNotUnderstand: — acción por defecto de un envío no entendido (S3/L5).
+ * send() llega aquí con un Message reificado (selector + args). L5 S2: SEÑALA un
+ * MessageNotUnderstood (capturable con on: MessageNotUnderstood do:), cerrando el
+ * lazo L3↔L5. Si nadie lo captura, su defaultAction propaga un error de host cuyo
+ * texto conserva 'doesNotUnderstand' (backward-compat de los tests L3). Si la
+ * jerarquía aún no está cargada (uso de send fuera de evalWith), cae al error host.
  */
 function doesNotUnderstand(receiver: STValue, args: STValue[], u: Universe): STValue {
   const message = args[0] as unknown as Message;
   const recvClass = receiver === u.nil ? "UndefinedObject" : describeReceiver(receiver, u);
+  if (u.namespace.has("MessageNotUnderstood")) {
+    return signalMessageNotUnderstood(recvClass, message.selector, u);
+  }
   throw new Error(`doesNotUnderstand: ${recvClass} no entiende #${message.selector}`);
 }
 
