@@ -82,11 +82,15 @@ function isKindOfClass(start: STClass, target: STClass): boolean {
 // ─────────────────────────────────────────────────────────────────────────
 
 interface ExceptionSet extends STObject {
+  /** Marca de tipo: los ExceptionSet usan class=u.Object y un campo JS `elements`,
+   * idéntico al duck-type de STArray/STOrderedCollection. Sin un discriminante propio,
+   * `{Error. Warning}` (un Array literal) era aceptado como handler-set en on:do:. */
+  exceptionSet: true;
   elements: STClass[];
 }
 
 function isExceptionSet(v: STValue): v is ExceptionSet {
-  return typeof v === "object" && "class" in v && Array.isArray((v as ExceptionSet).elements);
+  return typeof v === "object" && v !== null && (v as ExceptionSet).exceptionSet === true;
 }
 
 /** Exception class>>, otherClassOrSet — construye/extiende un ExceptionSet.
@@ -105,6 +109,7 @@ function exceptionComma(receiver: STValue, args: STValue[], u: Universe): STValu
   else elements.push(right as STClass);
   const set: ExceptionSet = {
     class: u.Object,
+    exceptionSet: true,
     hash: 0,
     format: (elements[0] as STClass).format,
     pointers: [],

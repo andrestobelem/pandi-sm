@@ -1069,11 +1069,12 @@ function objectInstVarAt(receiver: STValue, args: STValue[], u: Universe): STVal
   }
   const obj = receiver as STObject;
   const i = Number(args[0] as number | bigint);
-  // Fuera de 1..instSize SEÑALA un Error capturable (L5), igual que Array>>at: — NO un
-  // throw de host imparseable. instVarAtOf re-chequea (defensa en profundidad), pero el
-  // guard de aquí lo hace inalcanzable para el caso fuera de rango.
-  if (i < 1 || i > obj.pointers.length) {
-    signalError(`instVarAt:: índice ${i} fuera de rango 1..${obj.pointers.length}`, u);
+  // Fuera de 1..instSize —o índice NO-entero (1.5, NaN)— SEÑALA un Error capturable
+  // (L5), igual que Array>>at: — NO un throw de host imparseable. Sin el chequeo de
+  // entero, un índice fraccionario dentro del rango (p.ej. 1.5 con instSize≥2) cae a
+  // pointers[0.5]=undefined y crashea el host al imprimir.
+  if (!Number.isInteger(i) || i < 1 || i > obj.pointers.length) {
+    return signalError(`instVarAt:: índice ${i} fuera de rango 1..${obj.pointers.length}`, u);
   }
   return instVarAtOf(obj, i);
 }
@@ -1091,8 +1092,8 @@ function objectInstVarAtPut(receiver: STValue, args: STValue[], u: Universe): ST
   }
   const obj = receiver as STObject;
   const i = Number(args[0] as number | bigint);
-  if (i < 1 || i > obj.pointers.length) {
-    signalError(`instVarAt:put:: índice ${i} fuera de rango 1..${obj.pointers.length}`, u);
+  if (!Number.isInteger(i) || i < 1 || i > obj.pointers.length) {
+    return signalError(`instVarAt:put:: índice ${i} fuera de rango 1..${obj.pointers.length}`, u);
   }
   return instVarAtPutOf(obj, i, args[1] as STValue);
 }
