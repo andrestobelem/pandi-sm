@@ -13,9 +13,11 @@ import {
   isCharacter,
   isFloat,
   type Message,
+  makeArray,
   makeCharacter,
   makeClassWithMetaclass,
   makeFloat,
+  makeOrderedCollection,
   notIdentical,
   type Primitive,
   type STArray,
@@ -24,6 +26,7 @@ import {
   type STClosure,
   type STFloat,
   type STObject,
+  type STOrderedCollection,
   type STSymbol,
   type STValue,
   type Universe,
@@ -197,8 +200,58 @@ function arrayAtPut(receiver: STValue, args: STValue[], u: Universe): STValue {
   return value;
 }
 
+// ── L4 F3 · enumeración base · do: (PRIMITIVA del hot-path de iteración) ─────
+// do: itera `elements` reentrando al evaluador (evalBlock) con cada elemento. Es el
+// CIMIENTO sobre el que Collection (.st) deriva collect:/select:/reject:/detect:/inject:
+// /includes: por envíos puros. Instalado sobre Array y OrderedCollection (ambos llevan
+// el campo `elements`). Devuelve el receptor (convención del bucle).
+
+/** Collection>>do: aBlock — invoca el bloque por cada elemento (1-aridad). Devuelve self. */
+function collectionDo(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const els = (receiver as STArray).elements;
+  const block = args[0] as STClosure;
+  for (const e of els) {
+    evalBlock(block, [e], u);
+  }
+  return receiver;
+}
+
+// ── L4 F3 · OrderedCollection growable · add:/at:/at:put:/size + new ─────────
+// Misma representación por campo `elements` que Array, pero de tamaño VARIABLE: add: hace
+// push. at:/at:put:/size son 1-based (reusan el chequeo de rango y señalan vía L5).
+
+/** OrderedCollection>>add: value — agrega al final (push) y devuelve el valor agregado. */
+function orderedAdd(receiver: STValue, args: STValue[]): STValue {
+  const oc = receiver as STOrderedCollection;
+  const value = args[0] as STValue;
+  oc.elements.push(value);
+  return value;
+}
+
+/** Array>>add: — Array es de tamaño FIJO: add: SEÑALA un Error (shouldNotImplement, §5.4). */
+function arrayAdd(_receiver: STValue, _args: STValue[], u: Universe): STValue {
+  signalError(`Array>>add:: un Array es de tamaño fijo (use OrderedCollection)`, u);
+}
+
 /**
- * SmallInteger>>/ (NUEVO L4 F2). Divisor 0 => SEÑALA ZeroDivide. Si algún operando es
+ * Collection class>>new — para OrderedCollection crea una instancia GROWABLE vacía
+ * (campo `elements: []`), NO un basicNew con `pointers` (que no tendría `elements`).
+ * El receptor es la clase OrderedCollection (vía su metaclase).
+ */
+function orderedNew(_receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeOrderedCollection([], u);
+}
+
+/**
+ * OrderedCollection>>asArray — copia los elementos a un Array FRESCO (species). Es el
+ * mecanismo con el que collect:/select:/reject: (Collection .st) producen un Array tras
+ * acumular en una OrderedCollection growable (species = Array, origin=dialecto, §8.10).
+ */
+function orderedAsArray(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeArray((receiver as STOrderedCollection).elements.slice(), u);
+}
+
+/** SmallInteger>>/ (NUEVO L4 F2). Divisor 0 => SEÑALA ZeroDivide. Si algún operando es
  * Float => división Float. Entre enteros: EXACTA (resto 0) => Integer (SmallInteger/
  * bigint); NO-exacta => Float (Fraction DIFERIDA, desviación log L6).
  */
@@ -937,6 +990,20 @@ export function installPrimitives(u: Universe): void {
   u.Array.methodDict.set(u.symbols.intern("at:"), arrayAt);
   u.Array.methodDict.set(u.symbols.intern("at:put:"), arrayAtPut);
   u.Array.methodDict.set(u.symbols.intern("size"), arraySize);
+  // L4 F3 · do: es el cimiento de la enumeración (primitiva del hot-path). Se instala en
+  // Collection (heredada por Array/OrderedCollection/Interval); at:/at:put:/size siguen
+  // siendo primitivas concretas porque Interval no las comparte (S3 las redefine).
+  u.namespace.get("Collection")?.methodDict.set(u.symbols.intern("do:"), collectionDo);
+  // Array>>add: señala (tamaño fijo); OrderedCollection es la colección growable.
+  u.Array.methodDict.set(u.symbols.intern("add:"), arrayAdd);
+  u.OrderedCollection.methodDict.set(u.symbols.intern("at:"), arrayAt);
+  u.OrderedCollection.methodDict.set(u.symbols.intern("at:put:"), arrayAtPut);
+  u.OrderedCollection.methodDict.set(u.symbols.intern("size"), arraySize);
+  u.OrderedCollection.methodDict.set(u.symbols.intern("add:"), orderedAdd);
+  u.OrderedCollection.methodDict.set(u.symbols.intern("asArray"), orderedAsArray);
+  // new growable (campo `elements: []`) en la metaclase de OrderedCollection (override del
+  // new de Object class, que daría un basicNew sin `elements`).
+  u.OrderedCollection.class.methodDict.set(u.symbols.intern("new"), orderedNew);
   // Condicionales como sends reales (DEV-003): instalados en True/False, no inline.
   u.True.methodDict.set(u.symbols.intern("ifTrue:"), trueIfTrue);
   u.False.methodDict.set(u.symbols.intern("ifTrue:"), falseIfTrue);

@@ -34,7 +34,13 @@ export function printString(value: STValue): string {
   // L4 F4 · Array boxed => forma literal "#(e1 e2 …)" (Pharo): cada elemento por su
   // propio printString, separados por espacio; vacío => "#()". ANTES del default
   // "a ClassName" para que el bridge host concuerde con el send printString.
-  if (isArray(value)) return `#(${value.elements.map(printString).join(" ")})`;
+  // OrderedCollection comparte el campo `elements` con Array, así que isArray() la captura;
+  // se distingue por la clase para imprimir la forma Pharo "an OrderedCollection(1 2 3)".
+  if (isArray(value)) {
+    const inner = value.elements.map(printString).join(" ");
+    if (value.class.name === "OrderedCollection") return `an OrderedCollection(${inner})`;
+    return `#(${inner})`;
+  }
   // STObject: `nil` (única instancia de UndefinedObject) imprime "nil"; el resto
   // usa el default Smalltalk "a ClassName" (printOn:/displayString son L3-proper).
   if (value.class.name === "UndefinedObject") return "nil";

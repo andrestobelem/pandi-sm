@@ -19,6 +19,34 @@ import { defineMethod } from "./method.js";
 export const COLLECTIONS_PROVENANCE = "l4-collections-sequenceable (origin=ingenieria/dialecto)";
 
 /**
+ * L4 F3 · Cuerpos derivados de Collection (.st), TODOS expresados por envíos puros sobre
+ * do:/size + bloques + self (el acceso por nombre de ivar en cuerpos .st no está cableado).
+ * do: es la primitiva que los cimienta (itera `elements` con evalBlock). Species: collect:/
+ * select:/reject: acumulan en una OrderedCollection growable y devuelven `asArray` (un Array
+ * fresco) — species = Array para TODO receptor secuenciable (origin=ingenieria/dialecto, §8.10,
+ * NO ANSI). detect: sin match señala un Error (vía error:, capturable por on: Error do:).
+ */
+const COLLECTION_METHODS: string[] = [
+  // size lo aporta la primitiva concreta (Array/OrderedCollection); isEmpty/notEmpty derivan.
+  "isEmpty [ ^self size = 0 ]",
+  "notEmpty [ ^self isEmpty not ]",
+  // includes: — recorre con do: y retorna por `^` no-local en cuanto encuentra el elemento.
+  "includes: anObject [ self do: [:e | e = anObject ifTrue: [^true]]. ^false ]",
+  // inject:into: — pliegue izquierdo; el bloque recibe (acumulador, elemento).
+  "inject: thisValue into: aBlock [ | acc | acc := thisValue. self do: [:e | acc := aBlock value: acc value: e]. ^acc ]",
+  // detect:ifNone: — primer match por `^`; si ninguno, el valor del bloque exceptionBlock.
+  "detect: aBlock ifNone: exceptionBlock [ self do: [:e | (aBlock value: e) ifTrue: [^e]]. ^exceptionBlock value ]",
+  // detect: — detect:ifNone: con un bloque que SEÑALA un Error vía la máquina L5 (Error
+  // signal:, capturable por on: Error do:), NO `self error:` (lanza un Error de host no
+  // capturable en el MVP). Mismo enrutado que at: fuera de rango (DRIFT-3: Error genérico).
+  "detect: aBlock [ ^self detect: aBlock ifNone: [Error signal: 'elemento no encontrado'] ]",
+  // collect:/select:/reject: — acumulan en una OrderedCollection y devuelven asArray (species).
+  "collect: aBlock [ | r | r := OrderedCollection new. self do: [:e | r add: (aBlock value: e)]. ^r asArray ]",
+  "select: aBlock [ | r | r := OrderedCollection new. self do: [:e | (aBlock value: e) ifTrue: [r add: e]]. ^r asArray ]",
+  "reject: aBlock [ | r | r := OrderedCollection new. self do: [:e | (aBlock value: e) ifFalse: [r add: e]]. ^r asArray ]",
+];
+
+/**
  * Cuerpos derivados de SequenceableCollection, como method-defs `.st` (patrón + cuerpo),
  * en términos de at:/size (los aportan las primitivas concretas de Array):
  *   first — el primer elemento (at: 1; 1-based, origin=dialecto).
@@ -33,6 +61,10 @@ const SEQUENCEABLE_METHODS: string[] = ["first [ ^self at: 1 ]", "last [ ^self a
  * cuerpos envían at:/size, ya instaladas en Array) y sobre el Universe fresco de cada evalWith.
  */
 export function loadCollectionMethods(u: Universe): void {
+  const collection = u.namespace.get("Collection") as STClass;
+  for (const def of COLLECTION_METHODS) {
+    defineMethod(collection, def, u, COLLECTIONS_PROVENANCE);
+  }
   const sequenceable = u.namespace.get("SequenceableCollection") as STClass;
   for (const def of SEQUENCEABLE_METHODS) {
     defineMethod(sequenceable, def, u, COLLECTIONS_PROVENANCE);

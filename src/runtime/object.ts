@@ -191,12 +191,27 @@ export interface STArray extends STObject {
   elements: STValue[];
 }
 
+/**
+ * STOrderedCollection — colección GROWABLE (L4 F3): un STObject (class = u.OrderedCollection)
+ * que porta sus elementos en el MISMO campo dedicado `elements` que STArray (mismo motivo:
+ * el acceso por nombre de ivar en cuerpos .st no está cableado). A diferencia de Array es de
+ * tamaño VARIABLE: add: hace push. Hereda do:/collect:/select:/… de Collection (.st). MVP
+ * mínimo (S2): cubre el add: positivo de GATE-F3 sobre un receptor genuinamente growable.
+ */
+export interface STOrderedCollection extends STObject {
+  elements: STValue[];
+}
+
 /** ¿`v` es un Float boxed? (tiene el campo dedicado `floatValue`). */
 export function isFloat(v: STValue): v is STFloat {
   return typeof v === "object" && "class" in v && typeof (v as STFloat).floatValue === "number";
 }
 
-/** ¿`v` es un Array boxed? (tiene el campo dedicado `elements`). */
+/**
+ * ¿`v` lleva un campo `elements`? (Array boxed o OrderedCollection growable — ambos comparten
+ * la representación por campo dedicado). El llamador distingue Array de OrderedCollection por
+ * `v.class` cuando importa (p.ej. add: señala sobre Array, hace push sobre OrderedCollection).
+ */
 export function isArray(v: STValue): v is STArray {
   return typeof v === "object" && "class" in v && Array.isArray((v as STArray).elements);
 }
@@ -242,6 +257,9 @@ export interface Universe {
   // Se materializa vía .st (kernel-collections) y se cablea aquí para que classOf y los
   // constructores { }/#( )/#[ ] la referencien sin lookup.
   Array: STClass;
+  // L4 F3: colección growable (STObject con campo dedicado `elements`, igual que Array pero de
+  // tamaño variable). Materializada en bootstrap; su add: hace push, su new arranca vacía.
+  OrderedCollection: STClass;
   String: STClass;
   Boolean: STClass;
   True: STClass;
@@ -349,6 +367,21 @@ export function makeCharacter(codePoint: number, u: Universe): STCharacter {
 export function makeArray(elements: STValue[], u: Universe): STArray {
   return {
     class: u.Array,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    elements,
+  };
+}
+
+/**
+ * makeOrderedCollection(elements, u) — caja un JS array de STValue como STOrderedCollection
+ * (class = u.OrderedCollection). Mismo campo dedicado `elements` que makeArray; la diferencia
+ * es la clase (y por ende el methodDict: add: hace push). `new` arranca vacío ([]).
+ */
+export function makeOrderedCollection(elements: STValue[], u: Universe): STOrderedCollection {
+  return {
+    class: u.OrderedCollection,
     hash: nextInstanceHash++,
     format: ObjectFormat.Pointers,
     pointers: [],

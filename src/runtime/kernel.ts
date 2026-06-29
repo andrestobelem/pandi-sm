@@ -109,6 +109,10 @@ export function bootstrapKernel(): Universe {
   const Collection = makeClass("Collection", Object_, 0);
   const SequenceableCollection = makeClass("SequenceableCollection", Collection, 0);
   const Array_ = makeClass("Array", SequenceableCollection, 0);
+  // L4 F3 · OrderedCollection growable (add: hace crecer). Cuelga de SequenceableCollection
+  // (ordenada e indexable como Array, pero de tamaño variable). MVP: comparte el campo
+  // `elements`; su add:/do:/at:/size son primitivas y hereda collect:/select:/… de Collection.
+  const OrderedCollection = makeClass("OrderedCollection", SequenceableCollection, 0);
   const String_ = makeClass("String", Object_, 0);
   // Boolean < Object; True/False < Boolean. true/false son booleans nativos JS
   // (classOf los mapea a True/False); estas clases existen para que ifTrue:/and:/not
@@ -153,6 +157,7 @@ export function bootstrapKernel(): Universe {
     Collection,
     SequenceableCollection,
     Array_,
+    OrderedCollection,
     String_,
     Boolean_,
     True_,
@@ -221,6 +226,7 @@ export function bootstrapKernel(): Universe {
     Collection,
     SequenceableCollection,
     Array_,
+    OrderedCollection,
     String_,
     Boolean_,
     True_,
@@ -242,6 +248,7 @@ export function bootstrapKernel(): Universe {
     Float,
     Character,
     Array: Array_,
+    OrderedCollection,
     String: String_,
     Boolean: Boolean_,
     True: True_,
