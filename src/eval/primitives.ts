@@ -13,6 +13,7 @@ import {
   isArray,
   isCharacter,
   isFloat,
+  isStream,
   isString,
   isSymbol,
   type Message,
@@ -1023,6 +1024,17 @@ function objectIsMemberOf(receiver: STValue, args: STValue[], u: Universe): STVa
  * una subclase con ivars heredados tiene esos slots.
  */
 function objectInstVarAt(receiver: STValue, args: STValue[], u: Universe): STValue {
+  // Inmediatos (número, bigint, booleano) y STSymbol (sin slot `class`) no tienen ivars.
+  // Señalar un Error capturable (L5) en lugar de dejar que .pointers sea undefined y
+  // cause un TypeError de host imparseable.
+  if (
+    typeof receiver !== "object" ||
+    receiver === null ||
+    !("class" in receiver) ||
+    !Array.isArray((receiver as STObject).pointers)
+  ) {
+    return signalError("instVarAt:: el receptor no es un STObject con ivars", u);
+  }
   const obj = receiver as STObject;
   const i = Number(args[0] as number | bigint);
   // Fuera de 1..instSize SEÑALA un Error capturable (L5), igual que Array>>at: — NO un
@@ -1036,6 +1048,15 @@ function objectInstVarAt(receiver: STValue, args: STValue[], u: Universe): STVal
 
 /** instVarAt:put: index value — escribe la ivar 1-based del receptor y devuelve el valor. */
 function objectInstVarAtPut(receiver: STValue, args: STValue[], u: Universe): STValue {
+  // Misma guardia que objectInstVarAt: señalar Error capturable si el receptor es inmediato.
+  if (
+    typeof receiver !== "object" ||
+    receiver === null ||
+    !("class" in receiver) ||
+    !Array.isArray((receiver as STObject).pointers)
+  ) {
+    return signalError("instVarAt:put:: el receptor no es un STObject con ivars", u);
+  }
   const obj = receiver as STObject;
   const i = Number(args[0] as number | bigint);
   if (i < 1 || i > obj.pointers.length) {
@@ -1058,7 +1079,8 @@ function objectIsKindOf(receiver: STValue, args: STValue[], u: Universe): STValu
 
 /** respondsTo: — true si lookup por la cadena halla el selector argumento. */
 function objectRespondsTo(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const sym = u.symbols.intern(args[0] as string);
+  // biome-ignore lint/style/noNonNullAssertion: args[0] siempre presente en dispatch
+  const sym = u.symbols.intern(stSymbolText(args[0]!));
   let cur: STClass | null = classOf(receiver, u);
   while (cur !== null) {
     if (cur.methodDict.has(sym)) return true;
@@ -1075,31 +1097,45 @@ function objectRespondsTo(receiver: STValue, args: STValue[], u: Universe): STVa
  * trips EXACTAMENTE como un send directo (misma maquinaria de dispatch).
  */
 function objectPerformWithArguments(receiver: STValue, args: STValue[], u: Universe): STValue {
-  const selector = args[0] as string;
-  const argArray = (args[1] ?? []) as STValue[];
+  // biome-ignore lint/style/noNonNullAssertion: args[0] siempre presente en dispatch
+  const selector = stSymbolText(args[0]!);
+  // args[1] puede ser un STArray boxed (desde Smalltalk) o un array JS nativo (desde tests)
+  const raw = args[1];
+  const argArray: STValue[] =
+    raw !== null &&
+    raw !== undefined &&
+    typeof raw === "object" &&
+    "class" in raw &&
+    Array.isArray((raw as unknown as { elements?: unknown }).elements)
+      ? ((raw as unknown as { elements: STValue[] }).elements as STValue[])
+      : ((raw ?? []) as STValue[]);
   return send(receiver, selector, argArray, u);
 }
 
 /** perform: (aridad 0) — perform:withArguments: con array vacío. */
 function objectPerform(receiver: STValue, args: STValue[], u: Universe): STValue {
-  return send(receiver, args[0] as string, [], u);
+  // biome-ignore lint/style/noNonNullAssertion: args[0] siempre presente en dispatch
+  return send(receiver, stSymbolText(args[0]!), [], u);
 }
 
 /** perform:with: (aridad 1) — un argumento posicional reenviado. */
 function objectPerformWith(receiver: STValue, args: STValue[], u: Universe): STValue {
-  return send(receiver, args[0] as string, [args[1] as STValue], u);
+  // biome-ignore lint/style/noNonNullAssertion: args[0] siempre presente en dispatch
+  return send(receiver, stSymbolText(args[0]!), [args[1] as STValue], u);
 }
 
 /** perform:with:with: (aridad 2). */
 function objectPerformWithWith(receiver: STValue, args: STValue[], u: Universe): STValue {
-  return send(receiver, args[0] as string, [args[1] as STValue, args[2] as STValue], u);
+  // biome-ignore lint/style/noNonNullAssertion: args[0] siempre presente en dispatch
+  return send(receiver, stSymbolText(args[0]!), [args[1] as STValue, args[2] as STValue], u);
 }
 
 /** perform:with:with:with: (aridad 3). */
 function objectPerformWithWithWith(receiver: STValue, args: STValue[], u: Universe): STValue {
   return send(
     receiver,
-    args[0] as string,
+    // biome-ignore lint/style/noNonNullAssertion: args[0] siempre presente en dispatch
+    stSymbolText(args[0]!),
     [args[1] as STValue, args[2] as STValue, args[3] as STValue],
     u,
   );
@@ -1124,11 +1160,22 @@ function objectCopy(receiver: STValue, _args: STValue[], u: Universe): STValue {
   // array `pointers` se copia (slice) para que la copia tenga sus propios slots
   // indexados (sus elementos siguen compartidos: shallow). El hash NO se
   // preserva: la copia es un objeto nuevo con identidad propia.
-  return {
+  const result: STObject = {
     ...receiver,
     hash: basicNew(receiver.class, u).hash,
     pointers: receiver.pointers.slice(),
   };
+  // Fix S1-#3: STArray y STOrderedCollection tienen un campo `elements` independiente
+  // del `pointers` de STObject. Sin este slice, la copia comparte la misma referencia
+  // de array que el original y cualquier mutación (at:put:, add:) corrompe el original.
+  if (isArray(result as STValue)) {
+    (result as unknown as STArray).elements = (receiver as unknown as STArray).elements.slice();
+  }
+  // STStream tiene un campo `buffer` análogo: también lo aislamos.
+  if (isStream(result as STValue)) {
+    (result as unknown as STStream).buffer = (receiver as unknown as STStream).buffer.slice();
+  }
+  return result;
 }
 
 /**
@@ -1171,6 +1218,19 @@ function objectPrintOn(receiver: STValue): STValue {
   // Computa el texto (efecto observable futuro) y devuelve el receptor (void).
   hostPrintString(receiver);
   return receiver;
+}
+
+/**
+ * stSymbolText — desenvuelve un STSymbol boxed o STString boxed a su string JS.
+ * Reutiliza `textOf` (fuente única de verdad en runtime/object.ts) y añade
+ * un fallback para strings JS nativos (red de seguridad interna). Usado por
+ * perform: y respondsTo: para extraer el selector antes de pasarlo a send()/intern().
+ */
+function stSymbolText(arg: STValue): string {
+  const t = textOf(arg);
+  if (t !== null) return t;
+  if (typeof arg === "string") return arg;
+  throw new Error(`stSymbolText: se esperaba STSymbol/STString/string, recibió ${String(arg)}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────
