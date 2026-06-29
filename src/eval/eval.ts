@@ -15,6 +15,7 @@
 
 import type {
   BlockNode,
+  CascadeNode,
   Expression,
   MessageSendNode,
   SequenceNode,
@@ -163,6 +164,8 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
     }
     case "MessageSend":
       return evalMessageSend(node, ctx);
+    case "Cascade":
+      return evalCascade(node, ctx);
     case "Variable":
       return resolveVariable(node.name, ctx);
     case "Assignment": {
@@ -185,7 +188,7 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
       return makeArray(els, ctx.u);
     }
     default:
-      throw new Error(`nodo no soportado en el skeleton: ${node.type}`);
+      throw new Error(`nodo no soportado en el skeleton: ${(node as Expression).type}`);
   }
 }
 
@@ -269,6 +272,23 @@ function evalMessageSend(node: MessageSendNode, ctx: EvalCtx): STValue {
   const receiver = evalNode(node.receiver, ctx);
   const args = node.args.map((arg) => evalNode(arg, ctx));
   return send(receiver, node.selector, args, ctx.u);
+}
+
+/**
+ * evalCascade — `recv m1; m2; …` (R9). El RECEPTOR (el operando previo al primer
+ * ';') se evalúa UNA sola vez; cada mensaje de `node.messages` se le envía en orden
+ * con sus argumentos evaluados en el contexto léxico actual. La cascada vale el
+ * resultado del ÚLTIMO mensaje (convención Smalltalk). `messages` siempre trae ≥2
+ * entradas (la cabeza incluida), así que nunca devuelve el receptor crudo.
+ */
+function evalCascade(node: CascadeNode, ctx: EvalCtx): STValue {
+  const receiver = evalNode(node.receiver, ctx);
+  let result: STValue = ctx.u.nil;
+  for (const msg of node.messages) {
+    const args = msg.args.map((arg) => evalNode(arg, ctx));
+    result = send(receiver, msg.selector, args, ctx.u);
+  }
+  return result;
 }
 
 /** Centinela: distingue "no es un bucle" de un bucle que devolvió nil. */
