@@ -11,6 +11,7 @@ import {
   isCharacter,
   isFloat,
   type Message,
+  makeCharacter,
   makeClassWithMetaclass,
   makeFloat,
   notIdentical,
@@ -179,6 +180,22 @@ function floatNegated(receiver: STValue, _args: STValue[], u: Universe): STValue
 
 function characterAsInteger(receiver: STValue): STValue {
   return (receiver as STCharacter).codePoint;
+}
+
+/** Character>>asCharacter — idempotente: un Character ya ES un Character (completitud ANSI). */
+function characterAsCharacter(receiver: STValue): STValue {
+  return receiver;
+}
+
+/**
+ * Integer>>asCharacter (NUEVO L4 F3/S3) — caja el code point del receptor entero como
+ * un Character (cierra el round-trip asInteger<->asCharacter: $a asInteger asCharacter
+ * == $a). Number() colapsa un bigint al code point JS; un valor fuera del rango Unicode
+ * lo deja en manos de makeCharacter/String.fromCodePoint (un RangeError de host se mapea
+ * a error observable, misma disciplina §8.3). Origin=dialecto: vive en SmallInteger.
+ */
+function smallIntegerAsCharacter(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeCharacter(Number(receiver as number | bigint), u);
 }
 
 function characterCompare(op: (a: number, b: number) => boolean): Primitive {
@@ -656,6 +673,8 @@ export function installPrimitives(u: Universe): void {
   u.SmallInteger.methodDict.set(u.symbols.intern("/"), smallIntegerDivide);
   u.SmallInteger.methodDict.set(u.symbols.intern("abs"), smallIntegerAbs);
   u.SmallInteger.methodDict.set(u.symbols.intern("negated"), smallIntegerNegated);
+  // L4 S3 · asCharacter: code point entero => Character boxed (round-trip con asInteger).
+  u.SmallInteger.methodDict.set(u.symbols.intern("asCharacter"), smallIntegerAsCharacter);
   // timesRepeat: itera (DEV-004); el bucle vive en la primitiva, no en la AST.
   u.SmallInteger.methodDict.set(u.symbols.intern("timesRepeat:"), timesRepeat);
   // Comparaciones: devuelven booleanos nativos (true/false -> True/False). El 2º
@@ -739,6 +758,8 @@ export function installPrimitives(u: Universe): void {
   // ── L4 F2 · Character (boxed) · asInteger/value + comparación ───────────────
   u.Character.methodDict.set(u.symbols.intern("asInteger"), characterAsInteger);
   u.Character.methodDict.set(u.symbols.intern("value"), characterAsInteger);
+  // L4 S3 · asCharacter sobre un Character es self (completitud ANSI del round-trip).
+  u.Character.methodDict.set(u.symbols.intern("asCharacter"), characterAsCharacter);
   u.Character.methodDict.set(
     u.symbols.intern("<"),
     characterCompare((a, b) => a < b),
