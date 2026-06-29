@@ -27,9 +27,11 @@ describe("L3 · eval · aritmética binaria sin precedencia (Anexo A.2)", () => 
 });
 
 describe("L3 · eval · literales", () => {
-  it("literal string 'hi' => la cadena hi", () => {
+  it("literal string 'hi' => un String BOXED cuyos chars imprimen 'hi'", () => {
+    // L4 F5 (boxing, DEV-037): un literal String ya NO es un nativo JS sino un STObject boxed
+    // {class:u.String, …, chars:'hi'}; el valor observable por código de usuario es su texto.
     const v = evalSt("'hi'");
-    expect(v).toBe("hi");
+    expect(typeof v).toBe("object");
     expect(printString(v)).toBe("hi");
   });
 

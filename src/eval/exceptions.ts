@@ -20,6 +20,8 @@ import {
   HandlerActionSignal,
   type HandlerContext,
   type HomeMarker,
+  isString,
+  makeString,
   type Primitive,
   type STClass,
   type STClosure,
@@ -178,6 +180,19 @@ function signalException(ex: STObject, u: Universe): STValue {
   return defaultAction(ex, u);
 }
 
+/**
+ * Desenvuelve un messageText a un string JS HOST (para construir el texto del Error de host),
+ * o null si no hay texto. L4 F5: signal: ahora puede guardar un STString boxed (valor de
+ * usuario, p.ej. `Error signal: 'kaboom'`), un string JS nativo (signalMessageNotUnderstood,
+ * texto interno) o nil. Sin este desenvuelto, un messageText boxed perdería su texto en el
+ * Error de host (DRIFT-4: on-do-signal toThrow(/kaboom/) fallaría).
+ */
+function messageTextHost(text: STValue): string | null {
+  if (isString(text)) return text.chars;
+  if (typeof text === "string") return text;
+  return null;
+}
+
 /** defaultAction: Error (y subtipos) propaga al top-level; Warning resume nil. */
 function defaultAction(ex: STObject, u: Universe): STValue {
   const warning = u.namespace.get("Warning");
@@ -187,7 +202,7 @@ function defaultAction(ex: STObject, u: Universe): STValue {
   // Error (o Exception base sin handler): propaga un error de host OBSERVABLE.
   const st = stateOf(ex, u);
   const mnu = u.namespace.get("MessageNotUnderstood");
-  const text = typeof st.messageText === "string" ? st.messageText : null;
+  const text = messageTextHost(st.messageText as STValue);
   if (mnu !== undefined && isKindOfClass(ex.class, mnu)) {
     // Backward-compat: un MNU no capturado preserva el texto host 'doesNotUnderstand'.
     throw new Error(text ?? `doesNotUnderstand: ${ex.class.name}`);
@@ -231,11 +246,18 @@ function instMessageText(receiver: STValue, _args: STValue[], u: Universe): STVa
   return stateOf(receiver as STObject, u).messageText;
 }
 
-/** Exception>>description — el messageText si lo hay, si no el nombre de la clase. */
+/**
+ * Exception>>description — el messageText si lo hay, si no el nombre de la clase (como String
+ * BOXED, capa de valor de usuario). L4 F5: un messageText boxed (signal: 'foo') se devuelve
+ * tal cual; uno nativo interno (MNU) se conserva como red de seguridad; sin texto, el nombre
+ * de la clase se boxea (no se filtra el campo nativo STClass.name a código de usuario).
+ */
 function instDescription(receiver: STValue, _args: STValue[], u: Universe): STValue {
   const ex = receiver as STObject;
-  const text = stateOf(ex, u).messageText;
-  return typeof text === "string" ? text : ex.class.name;
+  const text = stateOf(ex, u).messageText as STValue;
+  if (isString(text)) return text;
+  if (typeof text === "string") return text;
+  return makeString(ex.class.name, u);
 }
 
 /** Exception>>isResumable — Warning resumable; Error (y base) no (plan §5.5). */

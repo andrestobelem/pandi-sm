@@ -3,7 +3,14 @@
 // nil -> "nil"; otros STObject -> "a ClassName" (default Smalltalk).
 // El protocolo printOn:/displayString completo es L3-proper (diferido).
 
-import { isArray, isCharacter, isFloat, isInterval, type STValue } from "../runtime/index.js";
+import {
+  isArray,
+  isCharacter,
+  isFloat,
+  isInterval,
+  isString,
+  type STValue,
+} from "../runtime/index.js";
 
 /** Imprime un double con punto SIEMPRE: 3.0 => "3.0" (distinguible de SmallInteger 3). */
 function printFloat(n: number): string {
@@ -23,6 +30,11 @@ function printFloat(n: number): string {
 export function printString(value: STValue): string {
   if (typeof value === "number") return String(value);
   if (typeof value === "bigint") return value.toString();
+  // L4 F5 · String boxed => sus chars tal cual (el harness compara con ===). ANTES de la
+  // rama de objeto y de isFloat/isCharacter. La rama de string JS NATIVO de abajo se conserva
+  // como red de seguridad para los string internos (send("hi", "printString") en tests de bajo
+  // nivel, class.name que aún fluyan nativos): ambos imprimen su texto.
+  if (isString(value)) return value.chars;
   if (typeof value === "string") return value;
   if (typeof value === "boolean") return value ? "true" : "false";
   // STSymbol (plain object {text}, sin slot `class`): imprime "#text" (ANSI).

@@ -216,6 +216,20 @@ export interface STInterval extends STObject {
   by: number;
 }
 
+/**
+ * STString — String BOXED (L4 F5): un STObject (class = u.String) que porta sus caracteres
+ * en un campo dedicado `chars` (un string JS), mirroring STArray.elements (DEV-028: una sola
+ * representación por clase, sin split nativo/boxed). El boxing es OBLIGATORIO para GATE-F5: un
+ * string JS nativo es value-idéntico ('foo' === 'foo'), así que la IDENTIDAD ('==' por
+ * referencia, 'foo' == 'foo' copy => false) es imposible sin caja. Los string JS NATIVOS
+ * quedan INTERNOS (claves de la SymbolTable, el campo STClass.name de almacenamiento, el
+ * STSymbol.text, el texto de error interno y el valor de retorno del bridge print.ts); los
+ * STString boxed son la capa de VALOR de usuario (literales, Class>>name, Symbol>>asString…).
+ */
+export interface STString extends STObject {
+  chars: string;
+}
+
 /** ¿`v` es un Float boxed? (tiene el campo dedicado `floatValue`). */
 export function isFloat(v: STValue): v is STFloat {
   return typeof v === "object" && "class" in v && typeof (v as STFloat).floatValue === "number";
@@ -244,6 +258,11 @@ export function isArray(v: STValue): v is STArray {
 /** ¿`v` es un Character boxed? (tiene el campo dedicado `codePoint`). */
 export function isCharacter(v: STValue): v is STCharacter {
   return typeof v === "object" && "class" in v && typeof (v as STCharacter).codePoint === "number";
+}
+
+/** ¿`v` es un String boxed? (tiene el campo dedicado `chars`). NO confunde un string JS nativo. */
+export function isString(v: STValue): v is STString {
+  return typeof v === "object" && "class" in v && typeof (v as STString).chars === "string";
 }
 
 /** Una clase es un STObject extendido con estado de Behavior (method dict + cadena de superclases). */
@@ -383,6 +402,23 @@ export function makeCharacter(codePoint: number, u: Universe): STCharacter {
     format: ObjectFormat.Pointers,
     pointers: [],
     codePoint,
+  };
+}
+
+/**
+ * makeString(chars, u) — caja un string JS como STString (class = u.String). Los caracteres
+ * viven en el campo dedicado `chars`; `pointers` queda vacío (no usa ivars), espejo EXACTO de
+ * makeArray/makeCharacter. El hash nace estable/único: la IDENTIDAD de un String es por
+ * REFERENCIA (dos cajas distintas con mismos chars NO son ==, GATE-F5); la igualdad por
+ * CONTENIDO la da String>>=. Los literales, Class>>name y Symbol>>asString construyen aquí.
+ */
+export function makeString(chars: string, u: Universe): STString {
+  return {
+    class: u.String,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    chars,
   };
 }
 

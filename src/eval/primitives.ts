@@ -12,6 +12,7 @@ import {
   instVarAtPut as instVarAtPutOf,
   isCharacter,
   isFloat,
+  isString,
   type Message,
   makeArray,
   makeCharacter,
@@ -19,6 +20,7 @@ import {
   makeFloat,
   makeInterval,
   makeOrderedCollection,
+  makeString,
   notIdentical,
   type Primitive,
   type STArray,
@@ -159,7 +161,10 @@ function signalZeroDivide(u: Universe): never {
 function signalError(text: string, u: Universe): never {
   const error = u.namespace.get("Error");
   if (error === undefined) throw new Error("Error: jerarquía L5 no cargada");
-  send(error, "signal:", [text], u);
+  // L4 F5: el texto se boxea como STString (capa de valor de usuario), de modo que un handler
+  // que lea `e messageText` reciba un String que responde protocolo, no un nativo interno.
+  // defaultAction lo des-boxea para el Error de host sin handler (messageTextHost).
+  send(error, "signal:", [makeString(text, u)], u);
   throw new Error(`${text} (sin handler)`);
 }
 
@@ -487,12 +492,96 @@ function floatNotEquals(receiver: STValue, args: STValue[]): STValue {
   return !(floatEquals(receiver, args) as boolean);
 }
 
+// ── L4 F5 · String (boxed) · igualdad por CONTENIDO + interning ──────────────
+// La IDENTIDAD ('==') de un String boxed es por referencia (Object>>== vía identical(): dos
+// cajas distintas NO son ==, GATE-F5). Pero la igualdad ('=') es por CONTENIDO: String>>=
+// OVERRIDE el default Object>>= (que es identidad) comparando chars. Sin este override
+// 'foo' = 'foo' (dos cajas distintas) daría false — regresión sobre f0-identity. Un Symbol
+// (subclase de String) hereda esta '=' por contenido; su identidad interned (#foo == #foo)
+// la da el == heredado de Object sobre el MISMO objeto interned.
+
+/** String>>= — igualdad por VALOR (chars); un no-String NO es igual (ANSI Object>>=, sin error). */
+function stringEquals(receiver: STValue, args: STValue[]): STValue {
+  const b = args[0] as STValue;
+  if (!isString(receiver)) return false;
+  // Un Symbol es un plain object {text} (no STString boxed): comparamos contra su .text para
+  // que 'foo' = #foo siga la igualdad por contenido textual (Symbol < String en la jerarquía).
+  if (isString(b)) return receiver.chars === b.chars;
+  if (typeof b === "object" && b !== null && !("class" in b)) {
+    return receiver.chars === (b as STSymbol).text;
+  }
+  return false;
+}
+function stringNotEquals(receiver: STValue, args: STValue[]): STValue {
+  return !(stringEquals(receiver, args) as boolean);
+}
+
+/**
+ * String>>, (concat) — devuelve un String FRESCO con los chars de self seguidos de los del
+ * argumento. Es una operación a nivel de chars (no se expresa por do:/at: porque String no
+ * hereda el protocolo de colección — DRIFT-6: el ',' de SequenceableCollection devolvería un
+ * Array). Un argumento Symbol (< String) aporta su .text; un nativo (red de seguridad) su
+ * propio valor; cualquier otro receptor/arg no-String señala un Error capturable (no host).
+ */
+function stringConcat(receiver: STValue, args: STValue[], u: Universe): STValue {
+  if (!isString(receiver)) {
+    return signalError("String>>, requiere un receptor String", u);
+  }
+  const arg = args[0] as STValue;
+  const tail = isString(arg)
+    ? arg.chars
+    : typeof arg === "object" && arg !== null && !("class" in arg)
+      ? (arg as STSymbol).text
+      : typeof arg === "string"
+        ? arg
+        : null;
+  if (tail === null) {
+    return signalError("String>>, requiere un argumento String", u);
+  }
+  return makeString(receiver.chars + tail, u);
+}
+
+/** String>>size — cantidad de chars (operación a nivel de chars; Symbol < String la hereda). */
+function stringSize(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  if (isString(receiver)) return receiver.chars.length;
+  // Symbol (plain object {text}) hereda este selector; cuenta sobre su .text.
+  if (typeof receiver === "object" && receiver !== null && !("class" in receiver)) {
+    return (receiver as STSymbol).text.length;
+  }
+  return signalError("String>>size requiere un receptor String", u);
+}
+
+/**
+ * String>>asSymbol — interna los chars en la MISMA SymbolTable que da identidad a los
+ * selectores y literales #foo, de modo que 'foo' asSymbol == #foo es true por IDENTIDAD
+ * (el mismo objeto interned). Reusa u.symbols.intern (no construye un Symbol nuevo).
+ */
+function stringAsSymbol(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  const chars = isString(receiver) ? receiver.chars : "";
+  return u.symbols.intern(chars);
+}
+
+/**
+ * Symbol>>asString — devuelve un String BOXED con los chars del símbolo (ANSI: asString es
+ * un String mutable independiente). El receptor es un STSymbol (plain object {text}); su
+ * .text es el string JS interno que boxeamos. NO devuelve el mismo objeto (un String no es
+ * interned), así que 'foo' = #foo asString es true por contenido pero no por identidad.
+ */
+function symbolAsString(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  const text = (receiver as STSymbol).text;
+  return makeString(text, u);
+}
+
 /** Transcript>>show: acumula el argumento (texto) en el buffer del Transcript. */
 function transcriptShow(receiver: STValue, args: STValue[], u: Universe): STValue {
   const transcript = receiver as import("../runtime/index.js").STObject;
   const prev = typeof transcript.pointers[0] === "string" ? transcript.pointers[0] : "";
-  const arg = args[0];
-  transcript.pointers[0] = prev + (typeof arg === "string" ? arg : String(arg));
+  // El buffer del Transcript es un string JS nativo INTERNO (lo lee el adapter). El arg de
+  // show: ahora llega como STString boxed (el literal ya no es nativo): lo desenvolvemos a
+  // .chars antes de acumular. Un nativo (red de seguridad) o no-string conservan lo previo.
+  const arg = args[0] as STValue;
+  const text = isString(arg) ? arg.chars : typeof arg === "string" ? arg : String(arg);
+  transcript.pointers[0] = prev + text;
   // void en Smalltalk devuelve el receptor; mantenemos esa convención.
   return u.Transcript;
 }
@@ -874,7 +963,12 @@ function objectCopy(receiver: STValue, _args: STValue[], u: Universe): STValue {
  * es L5, diferido). Esto refleja la decisión §5.2 línea 336.
  */
 function objectError(_receiver: STValue, args: STValue[]): STValue {
-  const msg = typeof args[0] === "string" ? args[0] : String(args[0]);
+  // El arg de `error:` ahora llega como STString boxed (el literal ya no es nativo): lo
+  // desenvolvemos a .chars para que el texto del error de host sea el real (String(STObject)
+  // daría '[object Object]'). Un string JS nativo (red de seguridad) o cualquier otro valor
+  // conservan el comportamiento previo.
+  const arg = args[0] as STValue;
+  const msg = isString(arg) ? arg.chars : typeof arg === "string" ? arg : String(arg);
   throw new Error(msg);
 }
 
@@ -908,8 +1002,14 @@ function objectPrintOn(receiver: STValue): STValue {
 // reusando la lógica de braid del bootstrap (sin camino divergente).
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Lee el nombre de clase de un argumento: STSymbol (su .text) o String nativo. */
+/**
+ * Lee el nombre de clase de un argumento: un STString boxed (su .chars), un STSymbol (su
+ * .text) o un string JS nativo (red de seguridad interna). `subclass: #Foo` pasa un Symbol;
+ * `subclass: 'Foo'` ahora pasa un STString boxed (el literal ya no es nativo) — ambos se
+ * desenvuelven al string JS que el constructor necesita.
+ */
 function classNameArg(arg: STValue): string {
+  if (isString(arg)) return arg.chars;
   if (typeof arg === "string") return arg;
   if (typeof arg === "object" && arg !== null && !("class" in arg)) return (arg as STSymbol).text;
   throw new Error("subclass: nombre de clase inválido (se esperaba un símbolo o string)");
@@ -921,8 +1021,13 @@ function classNameArg(arg: STValue): string {
  * y el package se aceptan pero el loader las ignora en esta capa (documentado).
  */
 function countIvars(arg: STValue | undefined): number {
-  if (typeof arg !== "string") return 0;
-  const trimmed = arg.trim();
+  // El arg de instanceVariableNames: ('a b c') ahora llega como STString boxed (el literal ya
+  // no es nativo). Desenvolvemos .chars; si fuera un string JS nativo (red de seguridad) o
+  // cualquier otra cosa, el comportamiento previo se conserva (no-string => 0 ivars).
+  if (arg === undefined) return 0;
+  const chars = isString(arg) ? arg.chars : typeof arg === "string" ? arg : null;
+  if (chars === null) return 0;
+  const trimmed = chars.trim();
   return trimmed === "" ? 0 : trimmed.split(/\s+/).length;
 }
 
@@ -950,9 +1055,15 @@ function subclassShort(receiver: STValue, args: STValue[], u: Universe): STValue
   return makeClassWithMetaclass(name, superclass, superclass.instSize, u);
 }
 
-/** Behavior>>name — el nombre de la clase receptora (como String). */
-function classNamePrim(receiver: STValue): STValue {
-  return (receiver as STClass).name;
+/**
+ * Behavior>>name — el nombre de la clase receptora como String BOXED (ANSI Behavior>>name
+ * es un String). EL leak clave de la frontera: `aClass name` llega a código de usuario, así
+ * que debe ser un STString (no el campo nativo STClass.name de almacenamiento), que responde
+ * protocolo (=/,/printString). El bridge print.ts lo des-boxea, así que `X class name`
+ * impreso sigue dando el texto.
+ */
+function classNamePrim(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  return makeString((receiver as STClass).name, u);
 }
 
 /** ClassDescription>>instanceVariableNames: — ajusta instSize (acumulativo, DEV-025). */
@@ -1098,6 +1209,17 @@ export function installPrimitives(u: Universe): void {
   );
   u.Character.methodDict.set(u.symbols.intern("="), characterEquals);
   u.Character.methodDict.set(u.symbols.intern("~="), characterNotEquals);
+  // ── L4 F5 · String (boxed) · = por contenido (override de Object>>= identidad) + interning ──
+  // Symbol (< String) HEREDA = / ~= / asSymbol; Symbol>>asString se instala aparte (boxea su .text).
+  u.String.methodDict.set(u.symbols.intern("="), stringEquals);
+  u.String.methodDict.set(u.symbols.intern("~="), stringNotEquals);
+  u.String.methodDict.set(u.symbols.intern("asSymbol"), stringAsSymbol);
+  // , (concat) y size son a nivel de chars: String NO hereda el protocolo de SequenceableCollection
+  // (su ',' devolvería un Array — DRIFT-6), así que String porta el suyo propio (devuelve String).
+  // Symbol (< String) HEREDA , / size; Symbol>>asString se instala aparte (boxea su .text).
+  u.String.methodDict.set(u.symbols.intern(","), stringConcat);
+  u.String.methodDict.set(u.symbols.intern("size"), stringSize);
+  u.Symbol.methodDict.set(u.symbols.intern("asString"), symbolAsString);
   // ── L4 F4 · Array (boxed) · acceso indexado 1-based (at:/at:put:/size) ──────
   // at: fuera de 1..size SEÑALA un Error (L5), capturable por on: Error do:.
   u.Array.methodDict.set(u.symbols.intern("at:"), arrayAt);

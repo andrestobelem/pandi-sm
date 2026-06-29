@@ -1,9 +1,12 @@
 /**
  * L4 · F0 — identidad cross-familia (GATE-L4-IDENTITY). == / ~~ / identityHash
- * coherentes entre SmallInteger, String, Symbol, Boolean y UndefinedObject:
- * inmediatos por VALOR (3 == 3, 'a' == 'a', #foo == #foo), contenido distinto de
- * la misma clase => == false / = true (los inmutables, por valor), identityHash
- * consistente con ==. Character/Float == llegan en S2 (boxing), se anotan aquí.
+ * coherentes entre SmallInteger, String, Symbol, Boolean y UndefinedObject.
+ * INMEDIATOS (SmallInteger/Character/Boolean) y SINGLETONS (nil) son == por VALOR
+ * (3 == 3, $a == $a, true == true, nil == nil). Symbol es == por IDENTIDAD interned
+ * (#foo == #foo, el mismo objeto). String es BOXED (L4 F5, DEV-037): dos literales
+ * 'a' distintos son objetos DISTINTOS => == es FALSE (por referencia) e identityHash
+ * difiere; la igualdad por CONTENIDO (=) sigue TRUE. (DEV-038: estos 3 asertos se
+ * corrigieron de la semántica vieja string-inmediato a string-boxed-identidad.)
  *
  * @section L4.f0-identity
  * @kind    positive
@@ -22,9 +25,12 @@ describe("L4 · F0 · GATE-L4-IDENTITY · == por valor para inmediatos", () => {
     expect(printString(evalSt("3 ~~ 4"))).toBe("true");
   });
 
-  it("caso 3 — 'a' == 'a' => true (String por valor); 'a' == 'b' => false", () => {
-    expect(printString(evalSt("'a' == 'a'"))).toBe("true");
-    expect(printString(evalSt("'a' == 'b'"))).toBe("false");
+  it("caso 3 — 'a' == 'a' => false (String boxed, dos cajas distintas); 'a' = 'a' => true", () => {
+    // DEV-038: String pasó a STObject boxed (DEV-037); la IDENTIDAD es por referencia, así que
+    // dos literales 'a' distintos NO son ==. La igualdad por CONTENIDO (=) sí es true.
+    expect(printString(evalSt("'a' == 'a'"))).toBe("false");
+    expect(printString(evalSt("'a' = 'a'"))).toBe("true");
+    expect(printString(evalSt("'a' = 'b'"))).toBe("false");
   });
 
   it("caso 4 — #foo == #foo => true (Symbol interned, identidad por referencia)", () => {
@@ -50,9 +56,11 @@ describe("L4 · F0 · GATE-L4-IDENTITY · contenido distinto misma clase => ==fa
     expect(printString(evalSt("(9007199254740991 + 1) == 9007199254740992"))).toBe("true");
   });
 
-  it("= (igualdad por valor) vs == coinciden para inmutables de mismo valor", () => {
+  it("String boxed: = por CONTENIDO es true, == por IDENTIDAD es false (cajas distintas)", () => {
+    // DEV-038: con String boxed (DEV-037), = (contenido) y == (identidad) DIVERGEN para dos
+    // literales distintos del mismo texto: = true, == false. Antes (string-inmediato) coincidían.
     expect(printString(evalSt("'hola' = 'hola'"))).toBe("true");
-    expect(printString(evalSt("'hola' == 'hola'"))).toBe("true");
+    expect(printString(evalSt("'hola' == 'hola'"))).toBe("false");
   });
 });
 
@@ -65,7 +73,11 @@ describe("L4 · F0 · GATE-L4-IDENTITY · identityHash consistente con ==", () =
     expect(printString(evalSt("(#foo hash) = (#foo hash)"))).toBe("true");
   });
 
-  it("'a' identityHash == 'a' identityHash (string por valor)", () => {
-    expect(printString(evalSt("('a' identityHash) = ('a' identityHash)"))).toBe("true");
+  it("'a' identityHash =/= 'a' identityHash (String boxed: cajas distintas, hash por objeto)", () => {
+    // DEV-038: con String boxed (DEV-037), cada literal es un objeto con su hash por-objeto, así
+    // que dos 'a' distintos tienen identityHash DISTINTO (consistente con == false). Un MISMO
+    // binding sí conserva su hash (==/identityHash coherentes sobre la misma caja).
+    expect(printString(evalSt("('a' identityHash) = ('a' identityHash)"))).toBe("false");
+    expect(printString(evalSt("| s | s := 'a'. (s identityHash) = (s identityHash)"))).toBe("true");
   });
 });

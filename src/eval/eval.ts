@@ -27,6 +27,7 @@ import {
   makeArray,
   makeCharacter,
   makeFloat,
+  makeString,
   NonLocalReturn,
   ObjectFormat,
   type Scope,
@@ -39,6 +40,7 @@ import { loadCollectionMethods } from "./kernel-collections.js";
 import { KERNEL_EXCEPTION_SOURCES } from "./kernel-exceptions.js";
 import { loadKernelSources } from "./kernel-loader.js";
 import { loadNumericMethods } from "./kernel-numerics.js";
+import { loadStringMethods } from "./kernel-strings.js";
 import { installPrimitives, intervalEndpoint } from "./primitives.js";
 import { send, superSend } from "./send.js";
 
@@ -111,7 +113,10 @@ export function evalNode(node: Expression, ctx: EvalCtx): STValue {
         throw new Error("literal entero sin value numérico");
       }
       if (node.lit === "string") {
-        if (typeof node.value === "string") return node.value;
+        // L4 F5 · String boxed: el literal evalúa a un STString FRESCO (class u.String,
+        // campo `chars`), NO al string JS nativo. Dos literales 'foo' son cajas distintas
+        // (identidad '==' por referencia, GATE-F5); la igualdad por contenido la da String>>=.
+        if (typeof node.value === "string") return makeString(node.value, ctx.u);
         throw new Error("literal string sin value");
       }
       if (node.lit === "symbol") {
@@ -404,6 +409,10 @@ export function evalWith(source: string): EvalResult {
   // SequenceableCollection<-Array vive en bootstrap; aquí sólo se añaden los cuerpos,
   // con tag de procedencia (GATE-L4-PROVENANCE).
   loadCollectionMethods(universe);
+  // L4 F5: cuerpos derivados de String (.st: asString => ^self). El protocolo a nivel de chars
+  // (, / size / asSymbol / =) lo aportan primitivas en installPrimitives; aquí sólo el cuerpo
+  // puro por envío, con tag de procedencia (GATE-L4-PROVENANCE).
+  loadStringMethods(universe);
   // Scope de programa: self = nil (no hay receptor de método a tope de programa;
   // nil es el receptor convencional del doIt). home = un marcador fresco.
   const home: HomeMarker = {};
