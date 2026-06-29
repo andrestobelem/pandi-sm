@@ -1,5 +1,10 @@
 "---
+id: cascade-in-sequence
 kind: positive
+phase: parse
+layer: L1
+spec: anexoA:sequence.cascade
+origin: spec-ANSI
 section: sequence.cascade
 note: cascade message send inside a statement sequence
 ---"
