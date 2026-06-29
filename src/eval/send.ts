@@ -47,3 +47,37 @@ export function send(receiver: STValue, selector: string, args: STValue[], u: Un
   }
   return prim(receiver, args, u);
 }
+
+/**
+ * superSend(receiver, selector, args, definingClass) — despacho de `super` (§5.4.0,
+ * NORMATIVO): el receptor-VALOR es el mismo (self), pero el lookup ARRANCA en la
+ * superclase de la clase que DEFINIÓ el método en curso (NO en classOf(receiver)),
+ * de modo que C>>m con `super m` alcanza la impl heredada y no re-despacha a sí mismo.
+ * Un miss enruta por doesNotUnderstand: igual que send(). El defining-class lo provee
+ * el EvalCtx de la activación del CompiledMethod (method.ts).
+ */
+export function superSend(
+  receiver: STValue,
+  selector: string,
+  args: STValue[],
+  definingClass: STClass,
+  u: Universe,
+): STValue {
+  const sym = u.symbols.intern(selector);
+  // El lookup empieza en la superclase de la clase definidora; si ésta no es una
+  // clase con methodDict (definingClass === Object, superclass nil), no hay start.
+  const sup = definingClass.superclass;
+  const start: STClass | null = sup !== null && "methodDict" in sup ? sup : null;
+  const prim = start !== null ? lookup(start, sym) : undefined;
+  if (prim === undefined) {
+    // Miss en la cadena super: enrutamos por doesNotUnderstand: desde classOf(receiver)
+    // (la raíz Object siempre lo provee), preservando el fallo observable y determinista.
+    const dnu = lookup(classOf(receiver, u), u.symbols.intern("doesNotUnderstand:"));
+    if (dnu === undefined) {
+      throw new Error(`doesNotUnderstand: ${classOf(receiver, u).name} no entiende #${selector}`);
+    }
+    const message: Message = { selector, args };
+    return dnu(receiver, [message as unknown as STValue], u);
+  }
+  return prim(receiver, args, u);
+}

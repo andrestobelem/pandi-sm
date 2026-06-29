@@ -8,7 +8,10 @@
 // del parser ya codifica el orden. S3 añade: bucles como special-forms iterativas
 // (whileTrue:/whileFalse:/to:do:/to:by:do:, gating-por-bloque-literal, §5.3.1) y
 // non-local return (^ -> NonLocalReturn plano, capturado en la frontera de programa).
-// super queda diferido (no hay métodos de usuario contra los que super-despachar).
+// KERNELLOAD §5.4.0 (S2) añade super-dispatch: `super sel` (parser: Variable "super")
+// arranca el lookup en la superclase de la clase DEFINIDORA del método (definingClass
+// en EvalCtx), no en classOf(self). La activación de métodos de usuario vive en
+// method.ts (CompiledMethod), que reusa evalSequence + el home/NonLocalReturn de L3.
 
 import type {
   BlockNode,
@@ -29,12 +32,18 @@ import {
   type Universe,
 } from "../runtime/index.js";
 import { installPrimitives } from "./primitives.js";
-import { send } from "./send.js";
+import { send, superSend } from "./send.js";
 
-/** Contexto de evaluación: el scope léxico actual + el Universe (para send/globals). */
+/**
+ * Contexto de evaluación: el scope léxico actual + el Universe (para send/globals).
+ * `definingClass` es la clase que DEFINIÓ el método en ejecución (KERNELLOAD §5.4.0):
+ * `super` arranca el lookup en su superclase, NO en classOf(receiver). Es undefined
+ * a tope de programa (un `super` sin método definidor es un error/dNU).
+ */
 export interface EvalCtx {
   scope: Scope;
   u: Universe;
+  definingClass?: import("../runtime/index.js").STClass;
 }
 
 let nextClosureHash = 1;
@@ -175,6 +184,17 @@ function evalMessageSend(node: MessageSendNode, ctx: EvalCtx): STValue {
   // iteración) y NO interceptan el NonLocalReturn: un `^` los atraviesa por throw.
   const loop = tryLoopSpecialForm(node, ctx);
   if (loop !== NO_LOOP) return loop;
+  // `super sel ...`: el parser representa `super` como un Variable{name:"super"}
+  // (DRIFT-D, no hay nodo dedicado). El receptor-VALOR sigue siendo self; el lookup
+  // arranca en la superclase de la clase DEFINIDORA del método en curso (plan §5.4.0
+  // normativo), no en classOf(self). Un `super` a tope de programa (sin definingClass)
+  // no es resoluble: cae al envío normal, que enruta por doesNotUnderstand:.
+  if (node.receiver.type === "Variable" && node.receiver.name === "super") {
+    const args = node.args.map((arg) => evalNode(arg, ctx));
+    if (ctx.definingClass !== undefined) {
+      return superSend(ctx.scope.self, node.selector, args, ctx.definingClass, ctx.u);
+    }
+  }
   const receiver = evalNode(node.receiver, ctx);
   const args = node.args.map((arg) => evalNode(arg, ctx));
   return send(receiver, node.selector, args, ctx.u);
@@ -265,7 +285,7 @@ function tryLoopSpecialForm(node: MessageSendNode, ctx: EvalCtx): STValue | type
  * (nil si vacía). Un ReturnNode terminal se evalúa como el valor de la secuencia
  * (el unwind por NonLocalReturn es S3; aquí `^` sólo aparece a tope de programa).
  */
-function evalSequence(seq: SequenceNode, ctx: EvalCtx): STValue {
+export function evalSequence(seq: SequenceNode, ctx: EvalCtx): STValue {
   for (const temp of seq.temporaries) {
     ctx.scope.vars.set(temp.name, ctx.u.nil);
   }

@@ -12,8 +12,8 @@
  * @layer   L1
  */
 import { describe, expect, it } from "vitest";
-import { astToJSON } from "../../src/ast/index.js";
 import type { ProgramNode } from "../../src/ast/index.js";
+import { astToJSON } from "../../src/ast/index.js";
 import type { ParseError } from "../../src/parser/index.js";
 import { parse } from "../../src/parser/index.js";
 

@@ -20,9 +20,8 @@ import type {
   Statement,
   VariableNode,
 } from "../ast/nodes.js";
+import type { LexError, Token } from "../lexer/index.js";
 import { tokenize } from "../lexer/index.js";
-import type { LexError } from "../lexer/index.js";
-import type { Token } from "../lexer/index.js";
 import type { ParseError, ParseErrorCode } from "./errors.js";
 
 // Mapeo numKind del token -> LiteralKind del nodo (R11). Identidad para los tres.

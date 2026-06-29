@@ -9,8 +9,8 @@
  * @layer   L3
  */
 import { describe, expect, it } from "vitest";
-import { eval as evalSt, printString } from "../../src/eval/index.js";
 import { evalWith } from "../../src/eval/eval.js";
+import { eval as evalSt, printString } from "../../src/eval/index.js";
 
 describe("L3 · condicionales · ifTrue:ifFalse: (sends reales)", () => {
   it("true ifTrue: [1] ifFalse: [2] => 1 (aceptación)", () => {

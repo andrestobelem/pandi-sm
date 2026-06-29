@@ -5,7 +5,7 @@
 // `---`. En L0 sólo descubrimos y parseamos; la EJECUCIÓN del corpus se activa
 // cuando el RuntimeAdapter real (L1/L3) sustituya al stub.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface StCase {

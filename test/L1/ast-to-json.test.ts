@@ -7,13 +7,13 @@
  * @layer   L1
  */
 import { describe, expect, it } from "vitest";
-import { astToJSON } from "../../src/ast/index.js";
 import type {
   LiteralNode,
   MessageSendNode,
   SourceSpan,
   VariableNode,
 } from "../../src/ast/index.js";
+import { astToJSON } from "../../src/ast/index.js";
 
 // Span compartido (los valores concretos no importan para estos tests de forma).
 const SP: SourceSpan = {

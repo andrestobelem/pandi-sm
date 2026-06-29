@@ -7,8 +7,8 @@
  * @layer   L1
  */
 import { describe, expect, it } from "vitest";
-import { tokenize } from "../../src/lexer/index.js";
 import type { Token } from "../../src/lexer/index.js";
+import { tokenize } from "../../src/lexer/index.js";
 
 const types = (src: string): string[] => tokenize(src).tokens.map((t) => t.type);
 const lexemes = (src: string): string[] => tokenize(src).tokens.map((t) => t.lexeme);

@@ -2,5 +2,5 @@
 // (vacíos) de L1. Las exportaciones reales aterrizan cuando cada capa esté verde.
 export const VERSION = "0.0.0";
 
-export * from "./lexer/index.js";
 export * from "./ast/index.js";
+export * from "./lexer/index.js";
