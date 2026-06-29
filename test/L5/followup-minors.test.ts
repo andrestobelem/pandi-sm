@@ -56,3 +56,18 @@ describe("followup · isExceptionSet no confunde un Array con un ExceptionSet", 
     expect(run("[1/0] on: (Error , ZeroDivide) do: [:e | #caught]")).toBe("#caught");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// primitives.ts:1226 Object>>error: — lanzaba un Error de host CRUDO, NO capturable
+//   por on:do:, pese a que L5 ya está implementado (dNU sí se completó en L5). El
+//   diferimiento ("capturable es L5") era condicional a que L5 no existiera.
+//   Fix: bajo evalWith (jerarquía cargada) error: SEÑALA un Error capturable, igual
+//   que dNU; sin jerarquía (send crudo) cae a host-throw con el texto (test L2).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("followup · Object>>error: señala un Error capturable por on:do:", () => {
+  it("error: es capturado por on: Error do: y conserva el messageText", () => {
+    expect(run("[nil error: 'boom'] on: Error do: [:e | 'caught: ', e messageText]")).toBe(
+      "caught: boom",
+    );
+  });
+});

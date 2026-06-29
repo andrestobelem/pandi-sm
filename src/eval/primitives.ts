@@ -1212,17 +1212,20 @@ function objectCopy(receiver: STValue, _args: STValue[], u: Universe): STValue {
 }
 
 /**
- * error: — señala un error con el mensaje argumento. En L2/L3 lanza un Error de
- * host OBSERVABLE y determinista (full Exception navegable, capturable con on:do:,
- * es L5, diferido). Esto refleja la decisión §5.2 línea 336.
+ * error: — señala un Error con el mensaje argumento. Bajo evalWith (jerarquía L5
+ * cargada) SEÑALA un Error capturable con on: Error do:, EXACTO mismo patrón que
+ * doesNotUnderstand: (que se completó en L5). El diferimiento original ("capturable
+ * es L5", §5.2 línea 336) era condicional a que L5 no existiera. Sin la jerarquía
+ * (send crudo fuera de evalWith) cae a un Error de host observable conservando el
+ * texto, igual que el fallback de dNU (backward-compat de los tests L2).
  */
-function objectError(_receiver: STValue, args: STValue[]): STValue {
-  // El arg de `error:` ahora llega como STString boxed (el literal ya no es nativo): lo
-  // desenvolvemos a .chars para que el texto del error de host sea el real (String(STObject)
-  // daría '[object Object]'). Un string JS nativo (red de seguridad) o cualquier otro valor
-  // conservan el comportamiento previo.
+function objectError(_receiver: STValue, args: STValue[], u: Universe): STValue {
+  // El arg de `error:` llega como STString boxed (el literal ya no es nativo): lo
+  // desenvolvemos a .chars para que el texto sea el real (String(STObject) daría
+  // '[object Object]'). Un string JS nativo (red de seguridad) u otro valor se preservan.
   const arg = args[0] as STValue;
   const msg = isString(arg) ? arg.chars : typeof arg === "string" ? arg : String(arg);
+  if (u.namespace.has("Error")) return signalError(msg, u);
   throw new Error(msg);
 }
 
