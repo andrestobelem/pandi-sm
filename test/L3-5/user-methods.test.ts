@@ -107,6 +107,28 @@ describe("L3.5 · GATE-KERNELLOAD SUPER (positivo)", () => {
     expect(send(instanceOf(u, C), "tag", [], u)).toBe(100);
   });
 
+  // Follow-up audit · M2: `super to:do:`/`to:by:do:` con bloque LITERAL dentro de un
+  // método caía en tryLoopSpecialForm, que evaluaba `super` como receptor =>
+  // "variable no resoluble: super" (throw de host). Ahora `super` siempre va por el
+  // super-dispatch, nunca por el atajo iterativo.
+  it("`super to: 3 do: [...]` (bloque literal) hace super-dispatch, no crashea", () => {
+    const u = freshUniverse();
+    const A = subclassOf(u, u.Object, "Ato");
+    const B = subclassOf(u, A, "Bto");
+    defineMethod(A, "to: x do: y [ ^ #dispatched ]", u);
+    defineMethod(B, "run [ ^ super to: 3 do: [:i | i] ]", u);
+    expect(send(instanceOf(u, B), "run", [], u)).toBe(u.symbols.intern("dispatched"));
+  });
+
+  it("`super to: 3 by: 1 do: [...]` (bloque literal) también hace super-dispatch", () => {
+    const u = freshUniverse();
+    const A = subclassOf(u, u.Object, "Atb");
+    const B = subclassOf(u, A, "Btb");
+    defineMethod(A, "to: x by: s do: y [ ^ #stepped ]", u);
+    defineMethod(B, "run [ ^ super to: 3 by: 1 do: [:i | i] ]", u);
+    expect(send(instanceOf(u, B), "run", [], u)).toBe(u.symbols.intern("stepped"));
+  });
+
   it("`super sel` DENTRO de un ifTrue:-block alcanza la impl de la superclase", () => {
     const u = freshUniverse();
     const B = subclassOf(u, u.Object, "Bif");

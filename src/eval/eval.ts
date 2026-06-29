@@ -329,6 +329,13 @@ function truthy(v: STValue, u: Universe): boolean {
  */
 function tryLoopSpecialForm(node: MessageSendNode, ctx: EvalCtx): STValue | typeof NO_LOOP {
   const { u } = ctx;
+  // `super to: … do: […]`: la special-form evaluaría `super` como receptor con
+  // evalNode(Variable "super") -> "variable no resoluble: super" (throw de host NO
+  // capturable). Un `super` siempre debe ir por el super-dispatch de evalMessageSend
+  // (KERNELLOAD §5.4.0), nunca por el atajo iterativo: devolvemos NO_LOOP para que caiga
+  // allí. (DEV-020 cubría super a tope de programa; DEV-036 super con bloque NO literal;
+  // este hueco —super con bloque LITERAL dentro de un método— quedaba sin cubrir.)
+  if (node.receiver.type === "Variable" && node.receiver.name === "super") return NO_LOOP;
   switch (node.selector) {
     case "whileTrue:":
     case "whileFalse:": {
