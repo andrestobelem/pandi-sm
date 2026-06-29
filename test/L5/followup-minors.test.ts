@@ -71,3 +71,15 @@ describe("followup · Object>>error: señala un Error capturable por on:do:", ()
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// print.ts:51 m1 — un ExceptionSet (Error , Warning) comparte el campo `elements`
+//   con STArray, así que isArray() lo capturaba y lo imprimía como Array literal
+//   ("#(a Error class a Warning class)"), enmascarando su tipo. Fix: el guard por su
+//   discriminante `exceptionSet:true` lo hace caer al default "a Object".
+// ─────────────────────────────────────────────────────────────────────────────
+describe("followup · m1 · un ExceptionSet no se imprime como Array literal", () => {
+  it("(Error , Warning) printString no parece un Array `#(…)`", () => {
+    expect(run("(Error , Warning) printString")).toBe("a Object");
+  });
+});

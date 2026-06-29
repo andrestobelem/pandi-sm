@@ -48,6 +48,11 @@ export function printString(value: STValue): string {
   // "a ClassName" para que el bridge host concuerde con el send printString.
   // OrderedCollection comparte el campo `elements` con Array, así que isArray() la captura;
   // se distingue por la clase para imprimir la forma Pharo "an OrderedCollection(1 2 3)".
+  // Un ExceptionSet (Error , Warning) es un STObject con campo `elements` y class=Object,
+  // idéntico al duck-type de STArray; sin este guard isArray() lo capturaba y lo imprimía
+  // como un Array literal "#(a Error class …)", enmascarando su tipo. Su discriminante
+  // propio `exceptionSet:true` (exceptions.ts) lo distingue: cae al default "a Object".
+  if ((value as { exceptionSet?: unknown }).exceptionSet === true) return `a ${value.class.name}`;
   if (isArray(value)) {
     const inner = value.elements.map(printString).join(" ");
     if (value.class.name === "OrderedCollection") return `an OrderedCollection(${inner})`;
