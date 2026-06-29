@@ -10,6 +10,7 @@ import {
   identityHash as identityHashOf,
   instVarAt as instVarAtOf,
   instVarAtPut as instVarAtPutOf,
+  isArray,
   isCharacter,
   isFloat,
   isString,
@@ -20,6 +21,7 @@ import {
   makeFloat,
   makeInterval,
   makeOrderedCollection,
+  makeStream,
   makeString,
   notIdentical,
   type Primitive,
@@ -31,6 +33,7 @@ import {
   type STInterval,
   type STObject,
   type STOrderedCollection,
+  type STStream,
   type STSymbol,
   type STValue,
   type Universe,
@@ -490,6 +493,131 @@ function floatEquals(receiver: STValue, args: STValue[]): STValue {
 }
 function floatNotEquals(receiver: STValue, args: STValue[]): STValue {
   return !(floatEquals(receiver, args) as boolean);
+}
+
+// ── L4 F6 · Stream EN MEMORIA · on:/next/nextPut:/atEnd/contents/upToEnd/reset ──
+// El receptor de instancia es siempre un STStream (campos buffer/position/species). El stream
+// es DUEÑO de su buffer (JS array de STValue); position es 0-based (índice del PRÓXIMO elemento).
+// `on:` materializa el buffer desde un Array (elements) o un String (chars -> Characters boxed),
+// recordando la especie para que contents/upToEnd rindan la colección de respaldo (DRIFT-7: los
+// streams llevan su propio buffer, no dependen de `String new` ni de un String growable).
+
+/**
+ * desestructura el argumento de `on:` en (buffer, species): un Array boxed aporta una COPIA de
+ * sus elementos (species=Array); un String boxed aporta sus chars como Characters boxed
+ * (species=String); cualquier otro receptor cae a un Error capturable (no host). Un String vacío
+ * o un Array vacío rinden un buffer vacío (el caso WriteStream típico: `on: ''` / `on: #()`).
+ */
+function streamBufferOf(
+  arg: STValue,
+  u: Universe,
+): { buffer: STValue[]; species: "String" | "Array" } | null {
+  if (isString(arg)) {
+    const buffer: STValue[] = [];
+    for (const ch of arg.chars) buffer.push(makeCharacter(ch.codePointAt(0) as number, u));
+    return { buffer, species: "String" };
+  }
+  if (isArray(arg)) return { buffer: arg.elements.slice(), species: "Array" };
+  return null;
+}
+
+/**
+ * Stream class>>on: aCollection — construye un stream sobre una COPIA de la colección. Para un
+ * ReadStream la position arranca en 0 (lee desde el inicio). Para Write/ReadWriteStream la
+ * convención de escritura es position=0 sobre un buffer que se TRUNCA al escribir (un WriteStream
+ * sobreescribe desde el inicio, ANSI: `WriteStream on:` ignora el contenido previo del backing y
+ * comienza vacío) — por eso WriteStream arranca con buffer VACÍO conservando sólo la especie.
+ * El receptor es la clase concreta (vía su metaclase); makeStream usa esa clase.
+ */
+function streamOn(receiver: STValue, args: STValue[], u: Universe): STValue {
+  const cls = receiver as STClass;
+  const parsed = streamBufferOf(args[0] as STValue, u);
+  if (parsed === null) {
+    return signalError("Stream class>>on: requiere una colección secuenciable (Array o String)", u);
+  }
+  // WriteStream sobreescribe desde el inicio: arranca VACÍO (sólo recuerda la especie del
+  // respaldo). Read/ReadWriteStream leen la colección dada desde position 0.
+  const writeOnly = cls.name === "WriteStream";
+  const buffer = writeOnly ? [] : parsed.buffer;
+  return makeStream(cls, buffer, 0, parsed.species);
+}
+
+/**
+ * Stream>>next — devuelve el elemento en `position` y avanza. Pasado el final (atEnd) devuelve
+ * `nil` (retorno UNSPECIFIED en ANSI; pandi-sm elige nil, DEV-042). NO señala error: leer de un
+ * stream agotado es benigno (a diferencia de at: fuera de rango).
+ */
+function streamNext(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  const s = receiver as STStream;
+  if (s.position >= s.buffer.length) return u.nil;
+  const value = s.buffer[s.position] as STValue;
+  s.position += 1;
+  return value;
+}
+
+/**
+ * Stream>>nextPut: anObject — escribe en `position` (sobreescribe o extiende el buffer) y avanza.
+ * Devuelve el objeto escrito (ANSI: nextPut: responde su argumento; DEV-042 lo fija). Para un
+ * stream con backing String, un Character escrito conserva su caja (contents lo re-materializa).
+ */
+function streamNextPut(receiver: STValue, args: STValue[]): STValue {
+  const s = receiver as STStream;
+  const value = args[0] as STValue;
+  s.buffer[s.position] = value;
+  s.position += 1;
+  return value;
+}
+
+/** Stream>>atEnd — true si position alcanzó el final del buffer (no hay más que leer). */
+function streamAtEnd(receiver: STValue): STValue {
+  const s = receiver as STStream;
+  return s.position >= s.buffer.length;
+}
+
+/** materializa un buffer a la especie del stream: String (chars de los Characters) o Array. */
+function materializeStream(buffer: STValue[], species: "String" | "Array", u: Universe): STValue {
+  if (species === "String") {
+    let chars = "";
+    for (const e of buffer) {
+      // El buffer de un stream-String guarda Characters boxed; reconstruimos sus chars. Un
+      // elemento no-Character (defensivo) se imprime por su printString host.
+      chars += isCharacter(e) ? String.fromCodePoint(e.codePoint) : hostPrintString(e);
+    }
+    return makeString(chars, u);
+  }
+  return makeArray(buffer.slice(), u);
+}
+
+/**
+ * Stream>>contents — la colección COMPLETA acumulada (todo el buffer), materializada a la especie
+ * del respaldo (String/Array), INDEPENDIENTE de la position. Para un WriteStream es lo escrito.
+ */
+function streamContents(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  const s = receiver as STStream;
+  return materializeStream(s.buffer, s.species, u);
+}
+
+/**
+ * Stream>>upToEnd — el RESTO desde `position` hasta el final, materializado a la especie, y
+ * avanza la position al final (consume lo entregado, ANSI). Vacío si ya estaba al final.
+ */
+function streamUpToEnd(receiver: STValue, _args: STValue[], u: Universe): STValue {
+  const s = receiver as STStream;
+  const rest = s.buffer.slice(s.position);
+  s.position = s.buffer.length;
+  return materializeStream(rest, s.species, u);
+}
+
+/** Stream>>reset — vuelve la position al inicio (0); permite releer/sobreescribir. Devuelve self. */
+function streamReset(receiver: STValue): STValue {
+  const s = receiver as STStream;
+  s.position = 0;
+  return receiver;
+}
+
+/** Stream>>position — la posición actual 0-based (SmallInteger nativo). */
+function streamPosition(receiver: STValue): STValue {
+  return (receiver as STStream).position;
 }
 
 // ── L4 F5 · String (boxed) · igualdad por CONTENIDO + interning ──────────────
@@ -1246,6 +1374,20 @@ export function installPrimitives(u: Universe): void {
   // new growable (campo `elements: []`) en la metaclase de OrderedCollection (override del
   // new de Object class, que daría un basicNew sin `elements`).
   u.OrderedCollection.class.methodDict.set(u.symbols.intern("new"), orderedNew);
+  // ── L4 F6 · Stream EN MEMORIA · protocolo de instancia en Stream (heredado por toda la
+  // jerarquía) + `on:` en la metaclase de cada clase concreta (Read/Write/ReadWriteStream).
+  u.Stream.methodDict.set(u.symbols.intern("next"), streamNext);
+  u.Stream.methodDict.set(u.symbols.intern("nextPut:"), streamNextPut);
+  u.Stream.methodDict.set(u.symbols.intern("atEnd"), streamAtEnd);
+  u.Stream.methodDict.set(u.symbols.intern("contents"), streamContents);
+  u.Stream.methodDict.set(u.symbols.intern("upToEnd"), streamUpToEnd);
+  u.Stream.methodDict.set(u.symbols.intern("reset"), streamReset);
+  u.Stream.methodDict.set(u.symbols.intern("position"), streamPosition);
+  // `on:` en la metaclase de cada clase CONCRETA: streamOn usa el nombre de la clase receptora
+  // para decidir si arranca vacío (WriteStream sobreescribe) o sobre la colección dada (Read/RW).
+  for (const cls of [u.ReadStream, u.WriteStream, u.ReadWriteStream]) {
+    cls.class.methodDict.set(u.symbols.intern("on:"), streamOn);
+  }
   // Condicionales como sends reales (DEV-003): instalados en True/False, no inline.
   u.True.methodDict.set(u.symbols.intern("ifTrue:"), trueIfTrue);
   u.False.methodDict.set(u.symbols.intern("ifTrue:"), falseIfTrue);

@@ -126,6 +126,16 @@ export function bootstrapKernel(): Universe {
   const True_ = makeClass("True", Boolean_, 0);
   const False_ = makeClass("False", Boolean_, 0);
   const BlockClosure = makeClass("BlockClosure", Object_, 0);
+  // L4 F6 · jerarquía Stream EN MEMORIA: Stream <- PositionableStream <- ReadStream/WriteStream/
+  // ReadWriteStream. Se cablea AQUÍ (no en .st) por el mismo motivo que las colecciones: classOf
+  // y la primitiva de clase `on:` necesitan las clases vivas; el cargador rechaza re-declarar el
+  // núcleo. Las instancias son STStream (campos dedicados buffer/position/species). Los cuerpos
+  // (next/nextPut:/atEnd/contents/upToEnd/reset/on:) son primitivas en installPrimitives.
+  const Stream_ = makeClass("Stream", Object_, 0);
+  const PositionableStream = makeClass("PositionableStream", Stream_, 0);
+  const ReadStream = makeClass("ReadStream", PositionableStream, 0);
+  const WriteStream = makeClass("WriteStream", PositionableStream, 0);
+  const ReadWriteStream = makeClass("ReadWriteStream", PositionableStream, 0);
   // Symbol < String (los símbolos interned son la clase de un literal #Foo);
   // classOf(STSymbol) lo resuelve. El protocolo de Symbol (asString…) es diferido.
   const Symbol_ = makeClass("Symbol", String_, 0);
@@ -169,6 +179,11 @@ export function bootstrapKernel(): Universe {
     True_,
     False_,
     BlockClosure,
+    Stream_,
+    PositionableStream,
+    ReadStream,
+    WriteStream,
+    ReadWriteStream,
     Symbol_,
     Transcript_class,
   ];
@@ -239,6 +254,11 @@ export function bootstrapKernel(): Universe {
     True_,
     False_,
     BlockClosure,
+    Stream_,
+    PositionableStream,
+    ReadStream,
+    WriteStream,
+    ReadWriteStream,
     Symbol_,
   ];
   const namespace = new Map<string, STClass>();
@@ -262,6 +282,11 @@ export function bootstrapKernel(): Universe {
     True: True_,
     False: False_,
     BlockClosure,
+    Stream: Stream_,
+    PositionableStream,
+    ReadStream,
+    WriteStream,
+    ReadWriteStream,
     Symbol: Symbol_,
     Transcript_class,
     nil,

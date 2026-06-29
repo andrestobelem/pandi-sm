@@ -265,6 +265,32 @@ export function isString(v: STValue): v is STString {
   return typeof v === "object" && "class" in v && typeof (v as STString).chars === "string";
 }
 
+/**
+ * STStream — Stream EN MEMORIA (L4 F6): un STObject (class = una de la jerarquía Stream)
+ * que es DUEÑO de su propio buffer JS (`buffer: STValue[]`) + una `position` 0-based en
+ * campos dedicados (NO en `pointers`/ivars con nombre — el acceso por ivar en cuerpos .st no
+ * está cableado; mismo motivo que Array.elements / Interval.from). `species` recuerda la
+ * especie de la colección de respaldo ("String" => contents/upToEnd materializan un String
+ * vía makeString; "Array" => un Array vía makeArray), de modo que un WriteStream sobre '' rinde
+ * un String y sobre #() un Array (DRIFT-7: los streams llevan su propio buffer, no dependen de
+ * un String growable ni de `String new`).
+ */
+export interface STStream extends STObject {
+  buffer: STValue[];
+  position: number;
+  species: "String" | "Array";
+}
+
+/** ¿`v` es un Stream en memoria? (tiene los campos dedicados buffer/position/species). */
+export function isStream(v: STValue): v is STStream {
+  return (
+    typeof v === "object" &&
+    "class" in v &&
+    Array.isArray((v as STStream).buffer) &&
+    typeof (v as STStream).position === "number"
+  );
+}
+
 /** Una clase es un STObject extendido con estado de Behavior (method dict + cadena de superclases). */
 export interface STClass extends STObject {
   name: string;
@@ -312,6 +338,14 @@ export interface Universe {
   True: STClass;
   False: STClass;
   BlockClosure: STClass;
+  // L4 F6: jerarquía Stream en memoria. Stream <- PositionableStream <- ReadStream/WriteStream/
+  // ReadWriteStream. Se cablean en bootstrap (deben existir antes de classOf y de la primitiva
+  // de clase `on:`); sus instancias son STStream (campos dedicados buffer/position/species).
+  Stream: STClass;
+  PositionableStream: STClass;
+  ReadStream: STClass;
+  WriteStream: STClass;
+  ReadWriteStream: STClass;
   Symbol: STClass; // clase de los símbolos interned (literal #Foo); classOf(STSymbol)
   Transcript_class: STClass;
   nil: STObject; // instancia única de UndefinedObject
@@ -469,6 +503,32 @@ export function makeInterval(from: number, to: number, by: number, u: Universe):
     from,
     to,
     by,
+  };
+}
+
+/**
+ * makeStream(streamClass, buffer, position, species, u) — caja un Stream en memoria. El stream
+ * es DUEÑO del `buffer` (un JS array de STValue) y de su `position` (0-based, el índice del
+ * PRÓXIMO elemento a leer/escribir); `pointers` queda vacío. `species` define a qué colección
+ * materializan contents/upToEnd (String/Array). El hash nace estable/único (identidad por
+ * referencia). El caller (la primitiva `on:`) decide la clase concreta (Read/Write/ReadWrite).
+ * NO toma `u` (a diferencia de make{Float,Array,…}): la clase concreta llega explícita en
+ * `streamClass` y el hash sale del contador de módulo, así que no hay nada que mirar del Universe.
+ */
+export function makeStream(
+  streamClass: STClass,
+  buffer: STValue[],
+  position: number,
+  species: "String" | "Array",
+): STStream {
+  return {
+    class: streamClass,
+    hash: nextInstanceHash++,
+    format: ObjectFormat.Pointers,
+    pointers: [],
+    buffer,
+    position,
+    species,
   };
 }
 
